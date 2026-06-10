@@ -18,6 +18,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
+import { NeedsRemote } from '@/components/room/needs-remote';
 import { cn, formatDuration } from '@/lib/utils';
 import { SAMPLE_VIDEOS } from '@/shared/constants';
 import type { QueueItem } from '@/shared/protocol';
@@ -67,8 +68,6 @@ function EqualizerBars() {
 // ---------------------------------------------------------------------------
 
 function QueueItemThumbnail({ item }: { item: QueueItem }) {
-  // Prefer stored thumbnail (oEmbed-resolved for YT, or whatever was passed in);
-  // fall back to deriving the YT thumbnail from the source URL.
   let thumbSrc: string | null = item.thumbnail ?? null;
 
   if (!thumbSrc && item.type === 'youtube') {
@@ -134,7 +133,12 @@ function QueueRow({
   onRemove,
   onVote,
 }: QueueRowProps) {
-  const canRemove = canControlRoom || item.addedById === selfId;
+  // Remove is allowed if this client can control OR is the item's adder.
+  // Per §10 / §7 matrix: "item adder, controller, or host" — the adder path
+  // doesn't need the remote so we keep it outside NeedsRemote.
+  const selfIsAdder = item.addedById === selfId;
+  const canRemoveFree = selfIsAdder; // always allowed, no remote needed
+  const canRemoveWithRemote = canControlRoom; // controller/host path
 
   return (
     <motion.div
@@ -187,7 +191,7 @@ function QueueRow({
         </div>
       </div>
 
-      {/* Vote button */}
+      {/* Vote button — anyone can vote, no remote needed */}
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
@@ -218,79 +222,110 @@ function QueueRow({
         className={cn(
           'flex items-center gap-0.5 shrink-0',
           'opacity-0 group-hover:opacity-100 transition-opacity duration-150',
-          isNowPlaying && 'opacity-100', // always show equalizer when playing
+          isNowPlaying && 'opacity-100',
         )}
       >
         {isNowPlaying ? (
           <EqualizerBars />
         ) : (
           <>
-            {canControlRoom && (
-              <>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={onPlay}
-                      className="h-7 w-7 text-ember-400/70 hover:text-ember-300"
-                      aria-label="play now"
-                    >
-                      <Play className="size-3.5" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>play now</TooltipContent>
-                </Tooltip>
-
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={onMoveUp}
-                      disabled={index === 0}
-                      className="h-7 w-7 text-cream-400/70 hover:text-cream-200 disabled:opacity-30"
-                      aria-label="move up"
-                    >
-                      <ChevronUp className="size-3.5" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>move up</TooltipContent>
-                </Tooltip>
-
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={onMoveDown}
-                      disabled={index === totalItems - 1}
-                      className="h-7 w-7 text-cream-400/70 hover:text-cream-200 disabled:opacity-30"
-                      aria-label="move down"
-                    >
-                      <ChevronDown className="size-3.5" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>move down</TooltipContent>
-                </Tooltip>
-              </>
-            )}
-
-            {canRemove && (
+            {/* Play now — needs remote */}
+            <NeedsRemote>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
                     variant="ghost"
                     size="icon"
-                    onClick={onRemove}
-                    className="h-7 w-7 text-cream-400/70 hover:text-coal-red hover:bg-coal-red/10"
-                    aria-label="remove"
+                    onClick={canControlRoom ? onPlay : undefined}
+                    className="h-7 w-7 text-ember-400/70 hover:text-ember-300"
+                    aria-label="play now"
                   >
-                    <X className="size-3.5" />
+                    <Play className="size-3.5" />
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>remove</TooltipContent>
+                <TooltipContent>play now</TooltipContent>
               </Tooltip>
+            </NeedsRemote>
+
+            {/* Move up — needs remote */}
+            <NeedsRemote>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={canControlRoom ? onMoveUp : undefined}
+                    disabled={canControlRoom && index === 0}
+                    className="h-7 w-7 text-cream-400/70 hover:text-cream-200 disabled:opacity-30"
+                    aria-label="move up"
+                  >
+                    <ChevronUp className="size-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>move up</TooltipContent>
+              </Tooltip>
+            </NeedsRemote>
+
+            {/* Move down — needs remote */}
+            <NeedsRemote>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={canControlRoom ? onMoveDown : undefined}
+                    disabled={canControlRoom && index === totalItems - 1}
+                    className="h-7 w-7 text-cream-400/70 hover:text-cream-200 disabled:opacity-30"
+                    aria-label="move down"
+                  >
+                    <ChevronDown className="size-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>move down</TooltipContent>
+              </Tooltip>
+            </NeedsRemote>
+
+            {/*
+             * Remove:
+             * - Item adder: always allowed, no NeedsRemote wrapper
+             * - Controller/host (not adder): wrapped in NeedsRemote
+             * Both cases render the same button; adder path never shows the ghost.
+             */}
+            {(canRemoveFree || canRemoveWithRemote) && (
+              canRemoveFree ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={onRemove}
+                      className="h-7 w-7 text-cream-400/70 hover:text-coal-red hover:bg-coal-red/10"
+                      aria-label="remove"
+                    >
+                      <X className="size-3.5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>remove</TooltipContent>
+                </Tooltip>
+              ) : (
+                // canRemoveWithRemote only (not the adder)
+                <NeedsRemote>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={canControlRoom ? onRemove : undefined}
+                        className="h-7 w-7 text-cream-400/70 hover:text-coal-red hover:bg-coal-red/10"
+                        aria-label="remove"
+                      >
+                        <X className="size-3.5" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>remove</TooltipContent>
+                  </Tooltip>
+                </NeedsRemote>
+              )
             )}
           </>
         )}
@@ -345,7 +380,6 @@ function EmptyState() {
 
   return (
     <div className="flex flex-col items-center gap-5 py-10 px-4 text-center">
-      {/* Cozy doodle */}
       <div className="text-4xl leading-none select-none" aria-hidden>
         📺
       </div>
@@ -413,7 +447,6 @@ export function QueuePanel() {
         {/* Header */}
         <CardHeader className="flex-row items-center justify-between py-3 px-4 border-b border-couch-700 shrink-0 gap-0">
           <div className="flex items-center gap-2.5">
-            {/* Icon in a small tinted circle */}
             <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-ember-500/12 text-ember-400 shrink-0">
               <ListVideo className="size-3.5" />
             </div>

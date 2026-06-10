@@ -1,167 +1,94 @@
 'use client';
 
 /**
- * ReadyCheck — overlay banner for the "everyone ready?" check.
+ * ReadyCheck — the minimal top-center mini-pill (SPRINT2 §12 refactor).
  *
- * Renders null unless state.readyCheck?.active.
- * Pinned INSIDE the shell at top-16 (below the h-14 TopBar) so it never clips
- * on short screens. Drops in with a spring animation.
+ * The full "everyone ready?" interaction now lives in the consolidated RitualCard
+ * pinned at the top of chat (see `rituals/ActiveRitualCard` + ChatPanel) — the ready
+ * check is no longer a bespoke floating banner. This file stays as a thin mount so
+ * the import graph (RoomShell) is unchanged, and renders ONLY a small top-center
+ * "everyone ready? n/m" mini-pill so theater-mode users (whose chrome melts away and
+ * who therefore can't see the chat panel) still get a glanceable readout of a live
+ * check. Tapping the pill toggles your own locked-in flag — the one-tap affordance
+ * survives even with the panel gone.
  *
- * Shows:
- *  - n/total count of connected participants who are ready (always visible)
- *  - big toggle: "i'm ready 🟢" / "actually wait" (ready:set true/false)
- *  - controller/host: "start anyway ▶" (ready:cancel + media:play) + "cancel"
- *  - moss pulse ring when everyone is ready
+ * Renders null unless `state.readyCheck?.active`.
  */
 
 import * as React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useRoom } from '@/lib/realtime/room-context';
-import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
 export function ReadyCheck() {
-  const { state, self, isHost, isController, send } = useRoom();
+  const { state, self, send } = useRoom();
 
   const readyCheck = state?.readyCheck;
   const participants = state?.participants ?? {};
 
-  // Count only connected participants
   const connected = Object.values(participants).filter((p) => p.connected);
   const total = connected.length;
   const readyCount = connected.filter((p) => p.isReady).length;
   const allReady = total > 0 && readyCount === total;
-
   const isSelfReady = self?.isReady ?? false;
-  const canControl = isController || isHost;
-
-  function handleStartAnyway() {
-    send({ type: 'ready:cancel' });
-    send({ type: 'media:play' });
-  }
 
   return (
     <AnimatePresence>
       {readyCheck?.active && (
-        <motion.div
-          key="ready-check"
-          initial={{ y: -40, opacity: 0, scale: 0.97 }}
+        <motion.button
+          key="ready-pill"
+          type="button"
+          onClick={() => send({ type: 'ready:set', ready: !isSelfReady })}
+          initial={{ y: -28, opacity: 0, scale: 0.95 }}
           animate={{ y: 0, opacity: 1, scale: 1 }}
-          exit={{ y: -40, opacity: 0, scale: 0.97 }}
-          transition={{
-            type: 'spring',
-            stiffness: 420,
-            damping: 34,
-          }}
-          // top-16 = 64px, safely below the h-14 (56px) TopBar + border
+          exit={{ y: -28, opacity: 0, scale: 0.95 }}
+          transition={{ type: 'spring', stiffness: 440, damping: 34 }}
+          // top-16 = 64px, safely below the h-14 TopBar
           className={cn(
             'fixed top-16 left-1/2 z-50 -translate-x-1/2',
-            'w-full max-w-sm pointer-events-auto px-3',
+            'pointer-events-auto flex items-center gap-2 rounded-full border px-3 py-1.5',
+            'bg-couch-800/95 backdrop-blur-md shadow-[var(--shadow-lifted)]',
+            'text-xs font-medium transition-colors duration-200',
+            allReady
+              ? 'border-moss-500/55 text-moss-200'
+              : 'border-couch-650 text-cream-200 hover:border-ember-600/50',
           )}
+          aria-label={
+            isSelfReady ? 'tap to unlock — everyone ready check' : 'tap to lock in — everyone ready check'
+          }
         >
-          {/* Warm tray card — matches RemoteControls aesthetic */}
-          <div
-            className={cn(
-              'relative overflow-hidden rounded-2xl border p-4',
-              'bg-couch-800/96 backdrop-blur-md',
-              'shadow-[inset_0_1px_0_rgba(224,139,52,0.08),var(--shadow-lifted)]',
-              allReady
-                ? 'border-moss-500/50'
-                : 'border-couch-700',
-            )}
-          >
-            {/* Grain texture — keep content above z-10 */}
-            <div className="grain pointer-events-none absolute inset-0" aria-hidden />
-
-            {/* Moss pulse ring when everyone's ready */}
-            {allReady && (
-              <div
-                className="pointer-events-none absolute inset-0 rounded-2xl animate-pulse-glow"
-                style={{
-                  boxShadow:
-                    '0 0 0 2px rgba(86,133,95,0.35), 0 0 28px -4px rgba(86,133,95,0.3)',
-                }}
-                aria-hidden
-              />
-            )}
-
-            <div className="relative z-10 flex flex-col gap-3">
-              {/* Header — always fully visible, n/total on same line */}
-              <div className="flex items-center gap-2">
-                <span className="shrink-0 text-lg" aria-hidden>
-                  {allReady ? '🟢' : '👀'}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="font-display text-sm font-semibold leading-tight text-cream-50">
-                    {allReady ? "everyone's ready" : 'everyone ready?'}
-                    {/* n/total always on the same line so it's never clipped */}
-                    <span className="ml-1.5 font-mono text-xs font-normal text-cream-400">
-                      {readyCount}/{total} locked in
-                    </span>
-                  </p>
-                </div>
-
-                {/* Ready-progress pips */}
-                <div className="flex shrink-0 items-center gap-0.5">
-                  {connected.slice(0, 8).map((p) => (
-                    <div
-                      key={p.id}
-                      className={cn(
-                        'h-1.5 w-1.5 rounded-full transition-all duration-300',
-                        p.isReady ? 'bg-moss-400' : 'bg-couch-650',
-                      )}
-                      title={p.name}
-                    />
-                  ))}
-                  {connected.length > 8 && (
-                    <span className="ml-1 text-[10px] text-cream-400">
-                      +{connected.length - 8}
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* Self ready toggle */}
-              <Button
-                variant={isSelfReady ? 'outline' : 'accent'}
-                size="md"
-                className={cn(
-                  'w-full',
-                  isSelfReady
-                    ? 'border-moss-600/60 text-moss-300 hover:border-moss-500'
-                    : '',
-                )}
-                onClick={() =>
-                  send({ type: 'ready:set', ready: !isSelfReady })
-                }
-              >
-                {isSelfReady ? 'actually wait ✋' : 'locked in 🟢'}
-              </Button>
-
-              {/* Controller/host controls */}
-              {canControl && (
-                <div className="flex gap-2">
-                  <Button
-                    variant="default"
-                    size="sm"
-                    className="flex-1 gap-1 border-moss-700/50 text-moss-300 hover:border-moss-600"
-                    onClick={handleStartAnyway}
-                  >
-                    start anyway ▶
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-cream-400"
-                    onClick={() => send({ type: 'ready:cancel' })}
-                  >
-                    nevermind
-                  </Button>
-                </div>
+          {/* moss pulse ring when everyone's ready */}
+          {allReady && (
+            <span
+              className="pointer-events-none absolute inset-0 rounded-full animate-pulse-glow"
+              style={{
+                boxShadow: '0 0 0 2px rgba(86,133,95,0.35), 0 0 24px -4px rgba(86,133,95,0.3)',
+              }}
+              aria-hidden
+            />
+          )}
+          <span className="relative leading-none" aria-hidden>
+            {allReady ? '🟢' : '👀'}
+          </span>
+          <span className="relative font-display font-semibold leading-none">
+            {allReady ? "everyone's ready" : 'everyone ready?'}
+          </span>
+          <span className="relative font-mono text-[11px] text-cream-400">
+            {readyCount}/{total}
+          </span>
+          {!allReady && (
+            <span
+              className={cn(
+                'relative ml-0.5 rounded-full px-1.5 py-0.5 text-[10px] leading-none',
+                isSelfReady
+                  ? 'bg-moss-500/15 text-moss-300'
+                  : 'bg-ember-500/15 text-ember-300',
               )}
-            </div>
-          </div>
-        </motion.div>
+            >
+              {isSelfReady ? 'locked in' : 'tap to lock in'}
+            </span>
+          )}
+        </motion.button>
       )}
     </AnimatePresence>
   );

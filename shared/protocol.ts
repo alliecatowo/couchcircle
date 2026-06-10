@@ -88,6 +88,57 @@ export interface RemoteState { controllerId?: string; pendingRequests: string[];
 /** An in-progress snack-run vote. */
 export interface SnackVote { startedById: string; endsAt: number; yes: string[]; no: string[]; }
 
+/**
+ * Which flavor the circle (the generalized rotation) is running (§8). `toke`
+ * keeps the original spark/hit copy; `drink` sweeps the UI to glasses and the
+ * 🥂 toast. Purely cosmetic — the server logic is identical for both.
+ */
+export type CircleKind = 'toke' | 'drink';
+
+/**
+ * An in-progress "raise one" toast (§8). Opened by a circle member; runs for a
+ * 10s window. When ALL circle members raise (or the window ends with ≥2 raised)
+ * the server emits the CLINK. `raised` is the de-duped set of participant ids
+ * who have raised a glass.
+ */
+export interface ToastState { startedById: string; endsAt: number; raised: string[]; }
+
+/** Which chat game is running (§12). */
+export type GameKind = 'roulette' | 'most-likely' | 'movie-bingo';
+
+/** One movie-bingo trigger and whether the couch has checked it off. */
+export interface BingoTrigger { text: string; hit: boolean; }
+
+/**
+ * A movie-bingo "IT HAPPENED" claim awaiting a second crew member's confirm
+ * (§12). Expires after a short window; a confirm from a DIFFERENT participant
+ * within the window checks the trigger off.
+ */
+export interface PendingHit { index: number; byId: string; expiresAt: number; }
+
+/**
+ * An active chat game (§12) — the consolidated "ritual" grammar: a windowed bit
+ * of state plus a timer and a tally. One game at a time. Fields beyond `kind` /
+ * `startedById` are per-kind:
+ *   - roulette: just a suspense window (`endsAt`); server picks the sipper on end.
+ *   - most-likely: `prompt` + `endsAt` vote window + `votes` (voterId → targetId).
+ *   - movie-bingo: `triggers` (exactly 5) + transient `pendingHit`.
+ */
+export interface GameState {
+  kind: GameKind;
+  startedById: string;
+  /** server ts the window closes (roulette suspense / most-likely vote). */
+  endsAt?: number;
+  /** most-likely prompt text. */
+  prompt?: string;
+  /** most-likely tally: voterId → target participant id. */
+  votes?: Record<string, string>;
+  /** movie-bingo card: exactly 5 shared triggers. */
+  triggers?: BingoTrigger[];
+  /** movie-bingo claim awaiting a second confirm. */
+  pendingHit?: PendingHit;
+}
+
 /** The social "Sesh Mode" layer state (ritual flavor only). */
 export interface SeshState {
   enabled: boolean;
@@ -98,6 +149,12 @@ export interface SeshState {
   /** server ts when the synchronized spark moment lands */
   sparkCountdownEndsAt?: number;
   snackVote?: SnackVote;
+  /** circle flavor (§8): 'toke' (default) or 'drink'. */
+  circleKind: CircleKind;
+  /** an in-progress "raise one 🥂" toast (§8), when present. */
+  toast?: ToastState;
+  /** the active chat game (§12), when one is running. */
+  game?: GameState;
 }
 
 /** Host-editable room settings. */
@@ -206,6 +263,7 @@ export type ClientMessage =
   | { type: 'remote:grant'; toId: string }
   | { type: 'remote:revoke' }                        // host/controller -> control returns to host
   | { type: 'remote:pass'; toId: string }
+  | { type: 'remote:grab' }                          // §10 one-click take when up for grabs / chaos
   | { type: 'room:action'; kind: RoomActionKind }
   | { type: 'ready:start' } | { type: 'ready:set'; ready: boolean } | { type: 'ready:cancel' }
   | { type: 'sesh:enable'; enabled: boolean }
@@ -216,6 +274,14 @@ export type ClientMessage =
   | { type: 'sesh:rotation:hit' }
   | { type: 'sesh:countdown:start'; seconds: number }
   | { type: 'sesh:snack-vote'; vote: 'yes' | 'no' }
+  // §8 circle: flavor + the synchronized 🥂 toast.
+  | { type: 'sesh:circle:kind'; kind: CircleKind }   // controller/host sets toke|drink
+  | { type: 'sesh:toast:start' }                     // circle member opens a 10s window
+  | { type: 'sesh:toast:raise' }                     // members raise one 🥂 (dedup)
+  // §12 chat games: one generic start/action/stop trio, one reducer per kind.
+  | { type: 'sesh:game:start'; kind: GameKind; value?: string }
+  | { type: 'sesh:game:action'; action: string; value?: string }
+  | { type: 'sesh:game:stop' }
   | { type: 'settings:update'; settings: Partial<RoomSettings> & { remoteMode?: RemoteMode } }  // host only
   | { type: 'webrtc:offer'; toId: string; sdp: string }
   | { type: 'webrtc:answer'; toId: string; sdp: string }

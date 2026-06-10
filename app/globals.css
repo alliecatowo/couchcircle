@@ -335,6 +335,38 @@
   .animate-dialog-in { animation: dialog-in 0.22s var(--ease-cozy) both; }
   .animate-dialog-out { animation: dialog-out 0.15s var(--ease-cozy) both; }
 
+  /* ---- Safe-area insets (first-class mobile, §6) ---------------------
+     iOS notch / home-indicator aware padding + sizing. The layout sets
+     viewport-fit=cover; these utilities read env(safe-area-inset-*) and
+     fall back to 0 on every other device. Use on the mobile shell: the
+     letterboxed TV pads the top, the remote bar + bottom sheet pad the
+     bottom, and the side rails pad left/right (landscape notch). */
+  .pt-safe { padding-top: env(safe-area-inset-top, 0px); }
+  .pb-safe { padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .pl-safe { padding-left: env(safe-area-inset-left, 0px); }
+  .pr-safe { padding-right: env(safe-area-inset-right, 0px); }
+  .px-safe {
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+  /* Additive variants — layer a base pad WITH the safe inset so a control
+     keeps its own breathing room and clears the notch/indicator too. */
+  .pt-safe-2 { padding-top: calc(env(safe-area-inset-top, 0px) + 0.5rem); }
+  .pb-safe-2 { padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem); }
+  .pb-safe-3 { padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.75rem); }
+  /* margin/inset helpers for absolutely-positioned mobile chrome */
+  .bottom-safe { bottom: env(safe-area-inset-bottom, 0px); }
+  .top-safe { top: env(safe-area-inset-top, 0px); }
+  /* the bottom sheet uses this to reserve home-indicator clearance */
+  .h-safe-bottom { height: env(safe-area-inset-bottom, 0px); }
+
+  /* Gentle pulse for the bottom-sheet grab handle so it reads as draggable */
+  @keyframes handle-hint {
+    0%, 100% { opacity: 0.5; transform: scaleX(1); }
+    50% { opacity: 0.85; transform: scaleX(1.12); }
+  }
+  .animate-handle-hint { animation: handle-hint 2.8s var(--ease-cozy) infinite; }
+
   /* Respect reduced-motion: kill the ambient loops, keep layout intact */
   @media (prefers-reduced-motion: reduce) {
     .animate-float-bob,
@@ -344,6 +376,7 @@
     .animate-puff,
     .animate-blink,
     .animate-live-pulse,
+    .animate-handle-hint,
     .tv-glow::after {
       animation: none !important;
     }

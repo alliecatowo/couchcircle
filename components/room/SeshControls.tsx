@@ -23,7 +23,27 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from '@/components/ui/tooltip';
+import {
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
+  PopoverClose,
+} from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
+import {
+  readCircleKind,
+  readToast,
+  readGame,
+  sendRitual,
+  circleCopy,
+  type GameKind,
+} from './rituals/types';
+import {
+  MOST_LIKELY_PROMPTS,
+  MOVIE_BINGO_TRIGGERS,
+  sampleTriggers,
+  sampleMostLikelyPrompt,
+} from '@/lib/rituals/decks';
 
 // ---------------------------------------------------------------------------
 // Thin helper: tooltip-wrapped disabled button
@@ -115,6 +135,184 @@ function SnackVoteChip() {
 }
 
 // ---------------------------------------------------------------------------
+// Games popover — pick one of the three chat games (§12)
+// ---------------------------------------------------------------------------
+
+interface GameChoice {
+  kind: GameKind;
+  emoji: string;
+  label: string;
+  blurb: string;
+}
+
+const GAME_CHOICES: GameChoice[] = [
+  {
+    kind: 'roulette',
+    emoji: '🎲',
+    label: 'sip roulette',
+    blurb: 'spin → fate picks one of the crew',
+  },
+  {
+    kind: 'most-likely',
+    emoji: '🗳️',
+    label: 'most likely to…',
+    blurb: 'anonymous votes, the couch crowns one',
+  },
+  {
+    kind: 'movie-bingo',
+    emoji: '🍿',
+    label: 'movie bingo',
+    blurb: '5 shared triggers · call them as they hit',
+  },
+];
+
+function GamesPopover() {
+  const { state, send } = useRoom();
+  const activeGame = readGame(state);
+
+  function start(kind: GameKind) {
+    if (kind === 'most-likely') {
+      // server-b reducer: most-likely sends value = the prompt text
+      sendRitual(send, {
+        type: 'sesh:game:start',
+        kind,
+        value: sampleMostLikelyPrompt(),
+      });
+    } else if (kind === 'movie-bingo') {
+      // server-b reducer: bingo sends value = JSON of 5 sampled triggers
+      sendRitual(send, {
+        type: 'sesh:game:start',
+        kind,
+        value: JSON.stringify(sampleTriggers(5)),
+      });
+    } else {
+      sendRitual(send, { type: 'sesh:game:start', kind });
+    }
+  }
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          size="sm"
+          variant="outline"
+          className={cn(
+            'h-8 gap-1 rounded-xl px-3 text-xs',
+            'border-ember-700/60 text-ember-300 hover:border-ember-500 hover:text-ember-200',
+            'transition-colors duration-200',
+          )}
+        >
+          games 🎲
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64 p-2">
+        <p className="px-1 pb-1.5 pt-0.5 text-[10px] font-semibold uppercase tracking-widest text-cream-400/60">
+          pick a game
+        </p>
+        <div className="flex flex-col gap-1">
+          {GAME_CHOICES.map((g) => {
+            const isActive = activeGame?.kind === g.kind;
+            return (
+              <PopoverClose asChild key={g.kind}>
+                <button
+                  onClick={() => start(g.kind)}
+                  className={cn(
+                    'flex items-start gap-2 rounded-xl border px-2.5 py-2 text-left',
+                    'transition-colors duration-200',
+                    isActive
+                      ? 'border-ember-500/50 bg-ember-500/10'
+                      : 'border-couch-700 bg-couch-800/60 hover:border-ember-700/50 hover:bg-couch-750',
+                  )}
+                >
+                  <span className="shrink-0 text-base leading-none" aria-hidden>
+                    {g.emoji}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-xs font-semibold leading-tight text-cream-100">
+                      {g.label}
+                      {isActive && (
+                        <span className="ml-1.5 text-[9px] font-normal text-ember-300">live</span>
+                      )}
+                    </span>
+                    <span className="block text-[10px] leading-snug text-cream-400">
+                      {g.blurb}
+                    </span>
+                  </span>
+                </button>
+              </PopoverClose>
+            );
+          })}
+        </div>
+        {activeGame && (
+          <PopoverClose asChild>
+            <button
+              onClick={() => sendRitual(send, { type: 'sesh:game:stop' })}
+              className="mt-1 w-full rounded-xl px-2.5 py-1.5 text-center text-[10px] text-cream-400 transition-colors hover:bg-couch-750 hover:text-cream-200"
+            >
+              stop the {activeGame.kind.replace('-', ' ')}
+            </button>
+          </PopoverClose>
+        )}
+        {/* deck size footnote — keeps the self-serve, no-pressure framing */}
+        <p className="px-1 pt-1.5 text-[9px] leading-snug text-cream-400/50">
+          sips are self-serve · {MOST_LIKELY_PROMPTS.length} prompts ·{' '}
+          {MOVIE_BINGO_TRIGGERS.length} triggers
+        </p>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Circle kind toggle — toke 🍃 / drink 🥂 (host/controller, §8)
+// ---------------------------------------------------------------------------
+
+function CircleKindToggle({ canSet }: { canSet: boolean }) {
+  const { state, send } = useRoom();
+  const kind = readCircleKind(state);
+
+  const opts: { value: 'toke' | 'drink'; label: string }[] = [
+    { value: 'toke', label: 'toke 🍃' },
+    { value: 'drink', label: 'drink 🥂' },
+  ];
+
+  const control = (
+    <div
+      className={cn(
+        'flex overflow-hidden rounded-full border border-couch-650 bg-couch-850/70',
+        !canSet && 'opacity-50',
+      )}
+    >
+      {opts.map((o) => {
+        const active = kind === o.value;
+        return (
+          <button
+            key={o.value}
+            disabled={!canSet}
+            onClick={() => canSet && sendRitual(send, { type: 'sesh:circle:kind', kind: o.value })}
+            className={cn(
+              'px-2.5 py-1 text-[11px] font-medium leading-none transition-colors duration-200',
+              active
+                ? o.value === 'drink'
+                  ? 'bg-ember-500/20 text-ember-200'
+                  : 'bg-moss-500/20 text-moss-200'
+                : 'text-cream-400 hover:text-cream-200',
+              canSet ? '' : 'cursor-not-allowed',
+            )}
+            aria-pressed={active}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  if (canSet) return control;
+  return <DisabledTip tip="host or whoever has the remote sets the circle 🍃🥂">{control}</DisabledTip>;
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
@@ -138,6 +336,16 @@ export function SeshControls() {
   const canPassOrCount = inRotation || isController || isHost;
   const canStartStop = isController || isHost;
   const hasMembers = sesh.rotationIds.length > 0;
+
+  // Circle generalization (§8): the rotation has a kind (toke 🍃 / drink 🥂) that
+  // reskins the copy. The host or whoever has the remote sets it.
+  const circleKind = readCircleKind(state);
+  const copy = circleCopy(circleKind);
+  const isDrink = circleKind === 'drink';
+  const toast = readToast(state);
+  const toastLive = !!toast;
+  // members can open a toast window (the drink-kind synchronized clink).
+  const canToast = inRotation || isController || isHost;
 
   // Shared compact button style — outline variant for clear visibility on the dark tray
   const btnSm = cn(
@@ -173,10 +381,14 @@ export function SeshControls() {
 
         <Separator orientation="vertical" className="h-5 bg-couch-700" />
 
-        {/* ── Rotation cluster ──────────────────────────────────────── */}
+        {/* ── Circle (rotation) cluster ─────────────────────────────── */}
         <span className="text-[10px] font-semibold uppercase tracking-widest text-cream-400/50 shrink-0">
-          rotation
+          {isDrink ? 'circle' : 'rotation'}
         </span>
+
+        {/* toke / drink kind toggle */}
+        <CircleKindToggle canSet={canStartStop} />
+
         <div className="flex flex-wrap items-center gap-1.5">
           {/* Join / Leave */}
           {inRotation ? (
@@ -186,7 +398,7 @@ export function SeshControls() {
               className={btnSm}
               onClick={() => send({ type: 'sesh:rotation:leave' })}
             >
-              leave rotation
+              leave {copy.noun.replace('the ', '')}
             </Button>
           ) : (
             <Button
@@ -195,7 +407,7 @@ export function SeshControls() {
               className={cn(btnSm, 'border-moss-600/70 text-moss-300 hover:border-moss-500 hover:text-moss-200')}
               onClick={() => send({ type: 'sesh:rotation:join' })}
             >
-              join rotation 🍃
+              {copy.join}
             </Button>
           )}
 
@@ -230,7 +442,7 @@ export function SeshControls() {
             </>
           )}
 
-          {/* Spark in 5 🔥 */}
+          {/* Spark / toast in 5 — the synchronized countdown spark */}
           {canPassOrCount ? (
             <Button
               size="sm"
@@ -240,30 +452,52 @@ export function SeshControls() {
                 send({ type: 'sesh:countdown:start', seconds: SPARK_DEFAULT_SECONDS })
               }
             >
-              spark in 5 🔥
+              {copy.spark} {isDrink ? '🥂' : '🔥'}
             </Button>
           ) : (
-            <DisabledTip tip="join the rotation first 🍃">
+            <DisabledTip tip={`join ${copy.noun} first ${copy.emoji}`}>
               <Button size="sm" variant="outline" className={cn(btnSm, 'pointer-events-none opacity-40')}>
-                spark in 5 🔥
+                {copy.spark} {isDrink ? '🥂' : '🔥'}
               </Button>
             </DisabledTip>
           )}
 
-          {/* Hit now 💨 */}
-          {inRotation ? (
+          {/* Hit now 💨 / raise one 🥂 — the per-member synchronized action.
+              For the drink circle, "raise one" opens a 10s toast window (the clink). */}
+          {isDrink ? (
+            canToast ? (
+              <Button
+                size="sm"
+                variant="outline"
+                className={cn(
+                  btnSm,
+                  'border-ember-700/60 text-ember-300 hover:border-ember-500 hover:text-ember-200',
+                )}
+                disabled={toastLive}
+                onClick={() => sendRitual(send, { type: 'sesh:toast:start' })}
+              >
+                {toastLive ? 'toast live 🥂' : copy.act}
+              </Button>
+            ) : (
+              <DisabledTip tip={`join ${copy.noun} first ${copy.emoji}`}>
+                <Button size="sm" variant="outline" className={cn(btnSm, 'pointer-events-none opacity-40')}>
+                  {copy.act}
+                </Button>
+              </DisabledTip>
+            )
+          ) : inRotation ? (
             <Button
               size="sm"
               variant="outline"
               className={cn(btnSm, 'border-haze-600/60 text-haze-300 hover:border-haze-500 hover:text-haze-200')}
               onClick={() => send({ type: 'sesh:rotation:hit' })}
             >
-              hit now 💨
+              {copy.act}
             </Button>
           ) : (
-            <DisabledTip tip="join the rotation first 🍃">
+            <DisabledTip tip={`join ${copy.noun} first ${copy.emoji}`}>
               <Button size="sm" variant="outline" className={cn(btnSm, 'pointer-events-none opacity-40')}>
-                hit now 💨
+                {copy.act}
               </Button>
             </DisabledTip>
           )}
@@ -305,6 +539,15 @@ export function SeshControls() {
             </DisabledTip>
           )}
         </div>
+
+        {/* ── divider ───────────────────────────────────────────────── */}
+        <Separator orientation="vertical" className="h-5 bg-couch-700" />
+
+        {/* ── Games cluster — ONE button → pick a game (§12) ────────── */}
+        <span className="text-[10px] font-semibold uppercase tracking-widest text-cream-400/50 shrink-0">
+          games
+        </span>
+        <GamesPopover />
 
         {/* ── divider ───────────────────────────────────────────────── */}
         <Separator orientation="vertical" className="h-5 bg-couch-700" />

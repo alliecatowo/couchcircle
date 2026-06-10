@@ -22,10 +22,14 @@ import {
   serializeMessage,
 } from '../shared/protocol';
 import type {
+  BingoTrigger,
   ChatMessage,
+  CircleKind,
   ClientMessage,
   CreateOptions,
   ErrorCode,
+  GameKind,
+  GameState,
   IdentitySnapshot,
   MediaState,
   NewQueueItem,
@@ -72,6 +76,23 @@ const MAX_TITLE_LEN = 120;
 const MAX_URL_LEN = 2000;
 const MAX_CHAT_LEN = 500;
 
+// Wave-B ritual windows (§8 toast, §12 games). Each is a windowed bit of state
+// guarded by a timer, mirroring the snack-vote pattern.
+/** §8: a "raise one 🥂" toast stays open this long. */
+const TOAST_WINDOW_MS = 10_000;
+/** §12 roulette: suspense sweep before fate names a sipper. */
+const ROULETTE_SUSPENSE_MS = 3_000;
+/** §12 most-likely: vote window. */
+const MOST_LIKELY_WINDOW_MS = 20_000;
+/** §12 movie-bingo: a claimed trigger awaits a second confirm this long. */
+const BINGO_CONFIRM_MS = 10_000;
+/** §12 most-likely: prompt text cap. */
+const MAX_PROMPT_LEN = 120;
+/** §12 movie-bingo: per-trigger text cap. */
+const MAX_BINGO_TRIGGER_LEN = 80;
+/** §12 movie-bingo: exactly this many triggers on a card. */
+const BINGO_TRIGGER_COUNT = 5;
+
 export class RoomEngine {
   /** The authoritative durable state (null until initialized via a create join). */
   private state: RoomState | null = null;
@@ -95,6 +116,10 @@ export class RoomEngine {
   private rotationTimer: ReturnType<typeof setTimeout> | null = null;
   private countdownTimer: ReturnType<typeof setTimeout> | null = null;
   private snackTimer: ReturnType<typeof setTimeout> | null = null;
+  /** §8: closes the open toast window. */
+  private toastTimer: ReturnType<typeof setTimeout> | null = null;
+  /** §12: drives whichever game window is open (roulette suspense / vote tally / pending-hit expiry). */
+  private gameTimer: ReturnType<typeof setTimeout> | null = null;
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
   private persistDirty = false;
 
@@ -118,6 +143,13 @@ export class RoomEngine {
         // Old snapshots predate projectorCount; default it. No projector window
         // survives a restart, so any restored count is also stale → 0.
         this.state.projectorCount = 0;
+        // §8/§12: circleKind may be absent on pre-wave-B snapshots; default it.
+        // Transient ritual windows (toast / game) are driven by server timers
+        // that don't survive a cold start, so a restored one would hang forever
+        // — drop them so the couch comes back clean.
+        this.state.sesh.circleKind ??= 'toke';
+        this.state.sesh.toast = undefined;
+        this.state.sesh.game = undefined;
       }
     } catch {
       // Corrupt snapshot — start fresh.
@@ -431,7 +463,7 @@ export class RoomEngine {
       queue: [],
       media,
       remote: { controllerId: identity.id, pendingRequests: [], mode: 'request' },
-      sesh: { enabled: false, rotationActive: false, rotationIds: [], currentRotationIndex: 0 },
+      sesh: { enabled: false, rotationActive: false, rotationIds: [], currentRotationIndex: 0, circleKind: 'toke' },
       chat: [],
       events: [],
       projectorCount: this.projectors.size,
@@ -568,6 +600,10 @@ export class RoomEngine {
         if (!this.rateOk(sender, 'action')) return this.rateLimited(sender);
         if (!this.handleRemotePass(msg.toId, sender, pid)) return;
         break;
+      case 'remote:grab':
+        if (!this.rateOk(sender, 'action')) return this.rateLimited(sender);
+        if (!this.handleRemoteGrab(sender, pid)) return;
+        break;
 
       // ---- room actions -------------------------------------------------
       case 'room:action':
@@ -632,6 +668,35 @@ export class RoomEngine {
       case 'sesh:snack-vote':
         if (!this.rateOk(sender, 'action')) return this.rateLimited(sender);
         this.handleSnackVote(msg.vote, pid);
+        break;
+
+      // ---- §8 circle: flavor + toast --------------------------------------
+      case 'sesh:circle:kind':
+        if (!this.rateOk(sender, 'action')) return this.rateLimited(sender);
+        if (!this.requireControlOrHost(sender, pid)) return;
+        if (!this.handleCircleKind(msg.kind, pid)) return;
+        break;
+      case 'sesh:toast:start':
+        if (!this.rateOk(sender, 'action')) return this.rateLimited(sender);
+        if (!this.handleToastStart(sender, pid)) return;
+        break;
+      case 'sesh:toast:raise':
+        if (!this.rateOk(sender, 'action')) return this.rateLimited(sender);
+        if (!this.handleToastRaise(sender, pid)) return;
+        break;
+
+      // ---- §12 chat games -------------------------------------------------
+      case 'sesh:game:start':
+        if (!this.rateOk(sender, 'action')) return this.rateLimited(sender);
+        if (!this.handleGameStart(msg.kind, msg.value, sender, pid)) return;
+        break;
+      case 'sesh:game:action':
+        if (!this.rateOk(sender, 'action')) return this.rateLimited(sender);
+        if (!this.handleGameAction(msg.action, msg.value, sender, pid)) return;
+        break;
+      case 'sesh:game:stop':
+        if (!this.rateOk(sender, 'action')) return this.rateLimited(sender);
+        if (!this.handleGameStop(sender, pid)) return;
         break;
 
       // ---- settings -----------------------------------------------------
@@ -1030,6 +1095,29 @@ export class RoomEngine {
     return true;
   }
 
+  /**
+   * §10 one-click "grab the remote 🫳". Succeeds only when the remote is up for
+   * grabs — `controllerId` is unset OR points at a participant who has since
+   * been removed (orphaned, e.g. the last controller left with no host around to
+   * reclaim it) — OR the room is in chaos mode (anyone may just take it). Any
+   * other state (a live holder, request/host-only mode) is a §10 violation:
+   * those paths go through `remote:request`, never `remote:grab`.
+   */
+  private handleRemoteGrab(sender: Party.Connection, pid: string): boolean {
+    const state = this.state!;
+    const current = state.remote.controllerId;
+    if (current === pid) return false; // you already hold it — silent no-op, never an error
+    const upForGrabs = !current || !state.participants[current];
+    if (!upForGrabs && state.remote.mode !== 'chaos') {
+      this.sendError(sender, 'not-allowed', 'someone already has the remote — ask for it');
+      return false;
+    }
+    state.remote.controllerId = pid;
+    state.remote.pendingRequests = state.remote.pendingRequests.filter((id) => id !== pid);
+    this.pushEvent('remote', `🎮 ${this.name(pid)} grabbed the remote`, pid, '🎮');
+    return true;
+  }
+
   // -------------------------------------------------------------------------
   // Room actions
   // -------------------------------------------------------------------------
@@ -1110,6 +1198,10 @@ export class RoomEngine {
       this.clearCountdown();
       state.sesh.snackVote = undefined;
       if (this.snackTimer) clearTimeout(this.snackTimer), (this.snackTimer = null);
+      // §8/§12: ending the sesh also tears down any open toast + running game.
+      state.sesh.toast = undefined;
+      if (this.toastTimer) clearTimeout(this.toastTimer), (this.toastTimer = null);
+      this.clearGame();
     }
     this.pushEvent('sesh', enabled ? `${this.name(pid)} flipped on Sesh Mode 🌿` : `${this.name(pid)} ended the sesh`, pid, enabled ? '🌿' : '🌙');
   }
@@ -1244,6 +1336,429 @@ export class RoomEngine {
     this.touch();
     this.broadcastState();
     this.schedulePersist();
+  }
+
+  // -------------------------------------------------------------------------
+  // §8 Circle — flavor + the synchronized 🥂 toast
+  // -------------------------------------------------------------------------
+
+  /**
+   * The circle's membership IS the rotation roster (§8: "the rotation
+   * generalizes to the circle"). Circle-only rituals (the toast) gate on it.
+   */
+  private circleMembers(): string[] {
+    return this.state!.sesh.rotationIds;
+  }
+
+  /** Set the circle flavor (toke|drink). Controller/host only (gated by caller). */
+  private handleCircleKind(kind: CircleKind, pid: string): boolean {
+    if (kind !== 'toke' && kind !== 'drink') return false;
+    const s = this.state!.sesh;
+    if (s.circleKind === kind) return false;
+    s.circleKind = kind;
+    this.pushEvent(
+      'sesh',
+      kind === 'drink'
+        ? `🥂 ${this.name(pid)} switched the circle to drinks`
+        : `🌿 ${this.name(pid)} switched the circle to a toke sesh`,
+      pid,
+      kind === 'drink' ? '🥂' : '🌿',
+    );
+    return true;
+  }
+
+  /** Open a 10s "raise one 🥂" window. Circle member only; needs ≥1 member. */
+  private handleToastStart(sender: Party.Connection, pid: string): boolean {
+    const s = this.state!.sesh;
+    const members = this.circleMembers();
+    if (!members.includes(pid)) {
+      this.sendError(sender, 'not-allowed', 'join the circle to call a toast');
+      return false;
+    }
+    if (members.length < 1) {
+      this.sendError(sender, 'not-allowed', 'nobody in the circle to toast with');
+      return false;
+    }
+    const now = Date.now();
+    // An already-open window stays open — the starter just registers a raise.
+    if (!s.toast || s.toast.endsAt <= now) {
+      s.toast = { startedById: pid, endsAt: now + TOAST_WINDOW_MS, raised: [] };
+      this.pushEvent('sesh', `🥂 ${this.name(pid)} called a toast — raise one in ${TOAST_WINDOW_MS / 1000}s`, pid, '🥂');
+      if (this.toastTimer) clearTimeout(this.toastTimer);
+      this.toastTimer = setTimeout(() => this.closeToast(), TOAST_WINDOW_MS);
+    }
+    // The caller of the toast raises first.
+    this.registerRaise(pid);
+    return true;
+  }
+
+  /** A circle member raises their 🥂 (deduped). May land the CLINK early. */
+  private handleToastRaise(sender: Party.Connection, pid: string): boolean {
+    const s = this.state!.sesh;
+    const now = Date.now();
+    if (!s.toast || s.toast.endsAt <= now) {
+      this.sendError(sender, 'not-allowed', 'no toast is open right now');
+      return false;
+    }
+    if (!this.circleMembers().includes(pid)) {
+      this.sendError(sender, 'not-allowed', 'only the circle raises a glass');
+      return false;
+    }
+    this.registerRaise(pid);
+    return true;
+  }
+
+  /**
+   * Record a (deduped) raise; if EVERY current circle member has now raised,
+   * land the clink immediately rather than waiting out the window.
+   */
+  private registerRaise(pid: string): void {
+    const s = this.state!.sesh;
+    if (!s.toast) return;
+    if (!s.toast.raised.includes(pid)) s.toast.raised.push(pid);
+    const members = this.circleMembers();
+    // Everyone in the circle raised → clink early. (members.length is ≥1 here
+    // because the starter is a member and is always in `raised`.)
+    const allRaised = members.length > 0 && members.every((id) => s.toast!.raised.includes(id));
+    if (allRaised) this.fireClink();
+  }
+
+  /**
+   * Window-end handler: with ≥2 raised it's a clink; otherwise the toast just
+   * fizzles out quietly. Timer-driven, so it broadcasts on its own.
+   */
+  private closeToast(): void {
+    if (!this.state) return;
+    this.toastTimer = null;
+    const s = this.state.sesh;
+    if (!s.toast) return;
+    if (s.toast.raised.length >= 2) {
+      this.fireClink();
+      return;
+    }
+    s.toast = undefined;
+    this.touch();
+    this.broadcastState();
+    this.schedulePersist();
+  }
+
+  /**
+   * The payoff (§8): clear the toast, emit the CLINK line, and set every circle
+   * member to 'laughing' for flavor. Safe to call from either the early
+   * all-raised path (inside a mutation tail) or the timer path — it touches +
+   * broadcasts + persists itself, and clears the toast timer.
+   */
+  private fireClink(): void {
+    if (!this.state) return;
+    const s = this.state.sesh;
+    if (this.toastTimer) {
+      clearTimeout(this.toastTimer);
+      this.toastTimer = null;
+    }
+    s.toast = undefined;
+    for (const id of this.circleMembers()) {
+      const p = this.state.participants[id];
+      if (p) p.status = 'laughing';
+    }
+    this.pushEvent('sesh', '🥂 CLINK — the whole couch raised one', undefined, '🥂');
+    this.touch();
+    this.broadcastState();
+    this.schedulePersist();
+  }
+
+  // -------------------------------------------------------------------------
+  // §12 Chat games — one windowed reducer per kind
+  // -------------------------------------------------------------------------
+
+  /**
+   * Start a game (§12). Sesh must be enabled; anyone may start; only one game
+   * runs at a time. Per-kind the `value` carries the deck payload the client
+   * picked (so the server stays self-contained without owning the decks).
+   */
+  private handleGameStart(
+    kind: GameKind,
+    value: string | undefined,
+    sender: Party.Connection,
+    pid: string,
+  ): boolean {
+    const s = this.state!.sesh;
+    if (!s.enabled) {
+      this.sendError(sender, 'not-allowed', 'turn on sesh mode first');
+      return false;
+    }
+    if (s.game) {
+      this.sendError(sender, 'not-allowed', "a game's already going — finish it first");
+      return false;
+    }
+    switch (kind) {
+      case 'roulette':
+        return this.startRoulette(sender, pid);
+      case 'most-likely':
+        return this.startMostLikely(value, sender, pid);
+      case 'movie-bingo':
+        return this.startMovieBingo(value, sender, pid);
+      default: {
+        const _never: never = kind;
+        return _never;
+      }
+    }
+  }
+
+  /** Route a generic game action to the running game's reducer. */
+  private handleGameAction(
+    action: string,
+    value: string | undefined,
+    sender: Party.Connection,
+    pid: string,
+  ): boolean {
+    const game = this.state!.sesh.game;
+    if (!game) {
+      this.sendError(sender, 'not-allowed', 'no game is running');
+      return false;
+    }
+    switch (game.kind) {
+      case 'most-likely':
+        if (action === 'vote') return this.mostLikelyVote(value, sender, pid);
+        return false;
+      case 'movie-bingo':
+        if (action === 'hit') return this.bingoHit(value, sender, pid);
+        if (action === 'confirm') return this.bingoConfirm(value, sender, pid);
+        return false;
+      case 'roulette':
+        // Roulette is pure suspense — no mid-window actions.
+        return false;
+      default: {
+        const _never: never = game.kind;
+        return _never;
+      }
+    }
+  }
+
+  /** Stop the running game. Starter, controller, or host only. */
+  private handleGameStop(sender: Party.Connection, pid: string): boolean {
+    const state = this.state!;
+    const game = state.sesh.game;
+    if (!game) return false;
+    const allowed = game.startedById === pid || state.hostId === pid || state.remote.controllerId === pid;
+    if (!allowed) {
+      this.sendError(sender, 'not-allowed', 'only the starter, host, or controller can stop it');
+      return false;
+    }
+    this.clearGame();
+    this.pushEvent('sesh', '🎲 the game wrapped up', pid, '🎲');
+    return true;
+  }
+
+  // ---- sip roulette 🎲 -------------------------------------------------------
+
+  private startRoulette(sender: Party.Connection, pid: string): boolean {
+    const state = this.state!;
+    const eligible = this.connectedCrewIds();
+    if (eligible.length === 0) {
+      this.sendError(sender, 'not-allowed', 'nobody on the couch to spin for');
+      return false;
+    }
+    const now = Date.now();
+    state.sesh.game = { kind: 'roulette', startedById: pid, endsAt: now + ROULETTE_SUSPENSE_MS };
+    this.pushEvent('sesh', `🎲 ${this.name(pid)} spun the sip roulette…`, pid, '🎲');
+    if (this.gameTimer) clearTimeout(this.gameTimer);
+    this.gameTimer = setTimeout(() => this.resolveRoulette(), ROULETTE_SUSPENSE_MS);
+    return true;
+  }
+
+  private resolveRoulette(): void {
+    if (!this.state) return;
+    this.gameTimer = null;
+    const game = this.state.sesh.game;
+    if (!game || game.kind !== 'roulette') return;
+    // Re-sample connected crew at resolution time — people come and go.
+    const eligible = this.connectedCrewIds();
+    if (eligible.length === 0) {
+      this.clearGame();
+    } else {
+      const chosen = eligible[Math.floor(Math.random() * eligible.length)];
+      this.clearGame();
+      this.pushEvent('sesh', `🎲 fate says ${this.name(chosen)} takes a sip`, chosen, '🎲');
+    }
+    this.touch();
+    this.broadcastState();
+    this.schedulePersist();
+  }
+
+  // ---- most likely to… 🗳️ ---------------------------------------------------
+
+  private startMostLikely(value: string | undefined, sender: Party.Connection, pid: string): boolean {
+    const prompt = clampText(String(value ?? ''), MAX_PROMPT_LEN);
+    if (!prompt) {
+      this.sendError(sender, 'invalid-message', 'that prompt got lost on the way');
+      return false;
+    }
+    const now = Date.now();
+    this.state!.sesh.game = {
+      kind: 'most-likely',
+      startedById: pid,
+      endsAt: now + MOST_LIKELY_WINDOW_MS,
+      prompt,
+      votes: {},
+    };
+    this.pushEvent('sesh', `🗳️ ${this.name(pid)} asked: ${prompt}`, pid, '🗳️');
+    if (this.gameTimer) clearTimeout(this.gameTimer);
+    this.gameTimer = setTimeout(() => this.tallyMostLikely(), MOST_LIKELY_WINDOW_MS);
+    return true;
+  }
+
+  private mostLikelyVote(value: string | undefined, sender: Party.Connection, pid: string): boolean {
+    const state = this.state!;
+    const game = state.sesh.game;
+    if (!game || game.kind !== 'most-likely' || !game.votes) return false;
+    if (game.endsAt && game.endsAt <= Date.now()) return false;
+    const targetId = String(value ?? '');
+    if (!state.participants[targetId]) {
+      this.sendError(sender, 'invalid-message', "that's not someone on the couch");
+      return false;
+    }
+    // One vote each, overwrite allowed.
+    game.votes[pid] = targetId;
+    return true;
+  }
+
+  private tallyMostLikely(): void {
+    if (!this.state) return;
+    this.gameTimer = null;
+    const game = this.state.sesh.game;
+    if (!game || game.kind !== 'most-likely' || !game.votes) return;
+    const counts = new Map<string, number>();
+    for (const targetId of Object.values(game.votes)) {
+      counts.set(targetId, (counts.get(targetId) ?? 0) + 1);
+    }
+    let topIds: string[] = [];
+    let top = 0;
+    for (const [id, c] of counts) {
+      if (c > top) {
+        top = c;
+        topIds = [id];
+      } else if (c === top) {
+        topIds.push(id);
+      }
+    }
+    this.clearGame();
+    if (top === 0) {
+      this.pushEvent('sesh', '🗳️ nobody voted — the couch abstains', undefined, '🗳️');
+    } else if (topIds.length > 1) {
+      this.pushEvent('sesh', '🗳️ the couch is split — everybody sips', undefined, '🗳️');
+    } else {
+      this.pushEvent('sesh', `🗳️ the couch has spoken: ${this.name(topIds[0])} sips`, topIds[0], '🗳️');
+    }
+    this.touch();
+    this.broadcastState();
+    this.schedulePersist();
+  }
+
+  // ---- movie bingo 🍿 -------------------------------------------------------
+
+  private startMovieBingo(value: string | undefined, sender: Party.Connection, pid: string): boolean {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(String(value ?? ''));
+    } catch {
+      this.sendError(sender, 'invalid-message', 'the bingo card got scrambled');
+      return false;
+    }
+    if (!Array.isArray(parsed) || parsed.length !== BINGO_TRIGGER_COUNT) {
+      this.sendError(sender, 'invalid-message', `a bingo card needs exactly ${BINGO_TRIGGER_COUNT} triggers`);
+      return false;
+    }
+    const triggers: BingoTrigger[] = [];
+    for (const raw of parsed) {
+      const text = clampText(String(raw ?? ''), MAX_BINGO_TRIGGER_LEN);
+      if (!text) {
+        this.sendError(sender, 'invalid-message', 'every bingo trigger needs some text');
+        return false;
+      }
+      triggers.push({ text, hit: false });
+    }
+    this.state!.sesh.game = { kind: 'movie-bingo', startedById: pid, triggers };
+    this.pushEvent('sesh', `🍿 ${this.name(pid)} dealt a movie-bingo card`, pid, '🍿');
+    return true;
+  }
+
+  private bingoHit(value: string | undefined, sender: Party.Connection, pid: string): boolean {
+    const game = this.state!.sesh.game;
+    if (!game || game.kind !== 'movie-bingo' || !game.triggers) return false;
+    const index = this.bingoIndex(value, game.triggers.length);
+    if (index === null) return false;
+    if (game.triggers[index].hit) return false; // already checked off
+    const now = Date.now();
+    // A live pending hit blocks a new claim until it expires or is confirmed.
+    if (game.pendingHit && game.pendingHit.expiresAt > now) {
+      this.sendError(sender, 'not-allowed', 'wait for the couch to confirm the last call');
+      return false;
+    }
+    game.pendingHit = { index, byId: pid, expiresAt: now + BINGO_CONFIRM_MS };
+    this.pushEvent('sesh', `🍿 ${this.name(pid)} calls "${game.triggers[index].text}" — who else saw it?`, pid, '🍿');
+    if (this.gameTimer) clearTimeout(this.gameTimer);
+    this.gameTimer = setTimeout(() => this.expireBingoHit(), BINGO_CONFIRM_MS);
+    return true;
+  }
+
+  private bingoConfirm(value: string | undefined, sender: Party.Connection, pid: string): boolean {
+    const game = this.state!.sesh.game;
+    if (!game || game.kind !== 'movie-bingo' || !game.triggers || !game.pendingHit) return false;
+    const index = this.bingoIndex(value, game.triggers.length);
+    if (index === null || index !== game.pendingHit.index) return false;
+    if (game.pendingHit.expiresAt <= Date.now()) return false; // stale; the expiry timer will clean it up
+    if (game.pendingHit.byId === pid) {
+      this.sendError(sender, 'not-allowed', 'needs a SECOND set of eyes — someone else confirms');
+      return false;
+    }
+    const trigger = game.triggers[index];
+    trigger.hit = true;
+    game.pendingHit = undefined;
+    if (this.gameTimer) {
+      clearTimeout(this.gameTimer);
+      this.gameTimer = null;
+    }
+    this.pushEvent('sesh', `🍿 BINGO: ${trigger.text} — everybody sips`, pid, '🍿');
+    if (game.triggers.every((t) => t.hit)) {
+      this.clearGame();
+      this.pushEvent('sesh', '🍿 FULL CARD — legendary couch', undefined, '🍿');
+    }
+    return true;
+  }
+
+  private expireBingoHit(): void {
+    if (!this.state) return;
+    this.gameTimer = null;
+    const game = this.state.sesh.game;
+    if (!game || game.kind !== 'movie-bingo' || !game.pendingHit) return;
+    // Silently clear an unconfirmed claim (§12: "expired pendingHit silently clears").
+    game.pendingHit = undefined;
+    this.touch();
+    this.broadcastState();
+    this.schedulePersist();
+  }
+
+  /** Parse + bounds-check a bingo trigger index from a stringy action value. */
+  private bingoIndex(value: string | undefined, length: number): number | null {
+    const n = Number(value);
+    if (!Number.isInteger(n) || n < 0 || n >= length) return null;
+    return n;
+  }
+
+  /** Connected crew ids — the pool roulette spins over. */
+  private connectedCrewIds(): string[] {
+    return Object.values(this.state!.participants)
+      .filter((p) => p.connected)
+      .map((p) => p.id);
+  }
+
+  /** Tear down the running game + its timer. */
+  private clearGame(): void {
+    this.state!.sesh.game = undefined;
+    if (this.gameTimer) {
+      clearTimeout(this.gameTimer);
+      this.gameTimer = null;
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -1460,6 +1975,14 @@ export class RoomEngine {
     if (this.snackTimer) {
       clearTimeout(this.snackTimer);
       this.snackTimer = null;
+    }
+    if (this.toastTimer) {
+      clearTimeout(this.toastTimer);
+      this.toastTimer = null;
+    }
+    if (this.gameTimer) {
+      clearTimeout(this.gameTimer);
+      this.gameTimer = null;
     }
     if (this.persistTimer) {
       clearTimeout(this.persistTimer);

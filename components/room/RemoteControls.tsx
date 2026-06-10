@@ -1,18 +1,24 @@
 'use client';
 
 /**
- * RemoteControls — the bottom-bar shared remote (§12 of ARCHITECTURE.md).
+ * RemoteControls — the bottom-bar shared remote (§12 of ARCHITECTURE.md, §10 of SPRINT2.md).
  *
  * Three clusters in a raised warm tray (bg-couch-800, top border, inner glow):
  *   LEFT   — transport (BIG circular ember play/pause, scrubber, time, rate)
- *   CENTER — remote ownership chip + request/grant/pass/revoke/ready controls
+ *   CENTER — remote ownership chip (three §10 states) + request/grant/pass/revoke/grab
  *   RIGHT  — compact local volume, SyncIndicator, round red emergency pause
  *
- * LEFT cluster starts at pl-14 (≥56px) so nothing sits under the Next.js dev
- * badge in the bottom-left corner of the viewport.
+ * §10 chip states:
+ *   1. "🎮 you've got the remote" — isController
+ *   2. "📺 {name} has it" — someone else holds it
+ *   3. "🛋️ up for grabs — grab it" — controllerId is undefined/absent
  *
- * All media/remote commands go through the room `send()`. Local volume is
- * adapter-local via `setLocalVolume` from the sync engine (not synced to others).
+ * Transport (play/pause/scrub/rate) is wrapped in <NeedsRemote> so the §10 UX
+ * law is enforced: amber-ghost, never dead disabled.
+ *
+ * Requests are visible only to the holder + host per §10.
+ *
+ * pl-14 (≥56px) keeps controls clear of the Next.js dev badge (bottom-left).
  */
 
 import * as React from 'react';
@@ -29,6 +35,7 @@ import {
 import { useRoom } from '@/lib/realtime/room-context';
 import { useSyncStatus, setLocalVolume } from '@/lib/sync/sync-engine';
 import { SyncIndicator } from '@/components/room/SyncIndicator';
+import { NeedsRemote } from '@/components/room/needs-remote';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Badge } from '@/components/ui/badge';
@@ -43,37 +50,13 @@ import {
   DropdownMenuRadioItem,
 } from '@/components/ui/dropdown-menu';
 import { cn, formatDuration } from '@/lib/utils';
+import type { ClientMessage } from '@/shared/protocol';
 
 // ---------------------------------------------------------------------------
 // Playback rate options
 // ---------------------------------------------------------------------------
 
 const RATE_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Wrap a disabled button with a Tooltip so the message still shows. */
-function DisabledTooltipButton({
-  tip,
-  children,
-  ...btnProps
-}: React.ComponentProps<typeof Button> & { tip: string }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        {/* span keeps pointer events alive so the tooltip fires even when disabled */}
-        <span tabIndex={0} className="inline-flex">
-          <Button disabled {...btnProps}>
-            {children}
-          </Button>
-        </span>
-      </TooltipTrigger>
-      <TooltipContent>{tip}</TooltipContent>
-    </Tooltip>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Main component
@@ -84,21 +67,21 @@ export function RemoteControls() {
 
   const sync = useSyncStatus();
 
-  // Local scrubber drag: we track our own value while dragging so the 4Hz
-  // sync-engine updates don't fight the user's drag gesture.
+  // Local scrubber drag: track value while dragging so the 4Hz sync-engine
+  // updates don't fight the user's drag gesture.
   const [scrubbing, setScrubbing] = React.useState(false);
   const [scrubValue, setScrubValue] = React.useState(0);
 
-  // Local volume (0..1). Default to 1 on mount; sync engine handles the actual call.
+  // Local volume (0..1).
   const [localVolume, setVolumeState] = React.useState(1);
 
-  // Track which pending-request chips the controller has locally dismissed (no
-  // message needed per spec — just cosmetic local hide).
+  // Track which pending-request chips the controller has locally dismissed
+  // (cosmetic local hide — no message needed per spec).
   const [dismissedRequests, setDismissedRequests] = React.useState<Set<string>>(
     new Set(),
   );
 
-  // Reset dismissed set when the room state remote changes (e.g. new session).
+  // Reset dismissed set when controllerId changes (new holder = fresh slate).
   const prevControllerId = React.useRef<string | undefined>(undefined);
   React.useEffect(() => {
     if (!state) return;
@@ -109,7 +92,7 @@ export function RemoteControls() {
   }, [state]);
 
   // --------------------------------------------------------------------------
-  // Guard: render nothing meaningful before join
+  // Guard: render skeleton before join
   // --------------------------------------------------------------------------
 
   if (!state) {
@@ -125,7 +108,7 @@ export function RemoteControls() {
   }
 
   // --------------------------------------------------------------------------
-  // Derive values from state
+  // Derived values
   // --------------------------------------------------------------------------
 
   const media = state.media;
@@ -134,7 +117,6 @@ export function RemoteControls() {
   const isPlaying = media.status === 'playing';
   const isMediaIdle = media.status === 'idle' || media.adapter === 'idle';
 
-  // Use sync engine's position estimate for the scrubber (updated ~4Hz).
   const positionSec = sync.positionSec;
   const durationSec = sync.durationSec;
   const isLive = sync.isLive;
@@ -145,17 +127,20 @@ export function RemoteControls() {
   const controllerId = remote.controllerId;
   const controllerParticipant = controllerId ? state.participants[controllerId] : null;
   const isController = selfId === controllerId;
+  const isUpForGrabs = !controllerId;
   const isHostOnly = remote.mode === 'host-only';
+  const isChaos = remote.mode === 'chaos';
 
   // Other connected participants (for pass-remote dropdown)
   const otherParticipants = Object.values(state.participants).filter(
     (p) => p.id !== selfId && p.connected,
   );
 
-  // Pending requests visible to this controller (filter locally-dismissed ones)
-  const visiblePendingRequests = remote.pendingRequests.filter(
-    (id) => !dismissedRequests.has(id),
-  );
+  // Pending requests — only the holder + host may see them per §10.
+  const canSeePendingRequests = isController || isHost;
+  const visiblePendingRequests = canSeePendingRequests
+    ? remote.pendingRequests.filter((id) => !dismissedRequests.has(id))
+    : [];
 
   // Has self already requested?
   const selfHasRequested = remote.pendingRequests.includes(selfId);
@@ -198,10 +183,6 @@ export function RemoteControls() {
     setLocalVolume(v);
   }
 
-  function handleRequestRemote() {
-    send({ type: 'remote:request' });
-  }
-
   function handleGrantRequest(toId: string) {
     send({ type: 'remote:grant', toId });
   }
@@ -222,6 +203,11 @@ export function RemoteControls() {
     send({ type: 'room:action', kind: 'emergency-pause' });
   }
 
+  function handleGrab() {
+    // remote:grab — SPRINT2 addition; cast while party-server task adds the type.
+    send({ type: 'remote:grab' } as unknown as ClientMessage);
+  }
+
   // --------------------------------------------------------------------------
   // Current scrubber display value
   // --------------------------------------------------------------------------
@@ -235,30 +221,27 @@ export function RemoteControls() {
   return (
     <div
       className={cn(
-        // Raised warm tray: bg-couch-800 sits above the couch-900 page bg
         'grain relative flex items-center gap-3 px-4 py-3',
         'border-t border-couch-700 bg-couch-800',
-        // Inner top glow — a faint ember shimmer along the raised edge
         'shadow-[inset_0_1px_0_rgba(224,139,52,0.10),var(--shadow-couch)]',
       )}
     >
       {/* ------------------------------------------------------------------ */}
-      {/* LEFT — Transport cluster                                             */}
-      {/* pl-14 (56px) keeps controls clear of the Next.js dev badge          */}
+      {/* LEFT — Transport cluster (wrapped in NeedsRemote per §10)            */}
+      {/* pl-14 (56px) keeps controls clear of the Next.js dev badge           */}
       {/* ------------------------------------------------------------------ */}
       <div className="flex min-w-0 flex-1 items-center gap-3 pl-10 sm:pl-14">
-        {/* BIG circular ember play/pause — primary control */}
-        {canControl ? (
+        {/* BIG circular ember play/pause */}
+        <NeedsRemote>
           <Button
             size="icon"
             variant={isMediaIdle || !canPause ? 'default' : 'accent'}
             onClick={handlePlayPause}
-            disabled={isMediaIdle || !canPause}
+            disabled={canControl && (isMediaIdle || !canPause)}
             aria-label={isPlaying ? 'pause' : 'play'}
             className={cn(
               'h-11 w-11 shrink-0 rounded-full',
-              // Ember glow when active and playing
-              !isMediaIdle && canPause && 'glow-ember',
+              !isMediaIdle && canPause && canControl && 'glow-ember',
             )}
           >
             {isPlaying ? (
@@ -267,23 +250,9 @@ export function RemoteControls() {
               <Play className="size-5" />
             )}
           </Button>
-        ) : (
-          <DisabledTooltipButton
-            size="icon"
-            variant="default"
-            tip="ask for the remote ✋"
-            aria-label={isPlaying ? 'pause' : 'play'}
-            className="h-11 w-11 shrink-0 rounded-full"
-          >
-            {isPlaying ? (
-              <Pause className="size-5" />
-            ) : (
-              <Play className="size-5" />
-            )}
-          </DisabledTooltipButton>
-        )}
+        </NeedsRemote>
 
-        {/* Scrubber region — hidden when idle, live, or no seek */}
+        {/* Scrubber region */}
         {isMediaIdle ? (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -317,37 +286,24 @@ export function RemoteControls() {
           </Badge>
         ) : (
           <div className="flex min-w-0 flex-1 items-center gap-2">
-            {/* Scrubber Slider — ember fill, cream thumb, hover:scale on track */}
-            {canControl ? (
+            {/* Scrubber Slider wrapped in NeedsRemote */}
+            <NeedsRemote className="min-w-0 flex-1">
               <Slider
                 value={[displayPos]}
                 max={durationSec ?? 0}
                 min={0}
                 step={1}
-                className="min-w-0 flex-1 transition-transform hover:scale-y-[1.3]"
-                onValueChange={handleScrubChange}
-                onValueCommit={handleScrubCommit}
+                className={cn(
+                  'min-w-0 flex-1 transition-transform hover:scale-y-[1.3]',
+                  !canControl && 'pointer-events-none',
+                )}
+                onValueChange={canControl ? handleScrubChange : undefined}
+                onValueCommit={canControl ? handleScrubCommit : undefined}
                 aria-label="seek"
               />
-            ) : (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="min-w-0 flex-1">
-                    <Slider
-                      value={[displayPos]}
-                      max={durationSec ?? 0}
-                      min={0}
-                      step={1}
-                      className="pointer-events-none min-w-0 flex-1 opacity-40"
-                      aria-label="seek (disabled)"
-                    />
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent>ask for the remote ✋</TooltipContent>
-              </Tooltip>
-            )}
+            </NeedsRemote>
 
-            {/* Time readout — mono-ish, small */}
+            {/* Time readout */}
             <span className="shrink-0 font-mono text-xs tabular-nums text-cream-400 leading-none">
               {formatDuration(displayPos)}
               <span className="mx-0.5 text-couch-600">/</span>
@@ -356,90 +312,107 @@ export function RemoteControls() {
           </div>
         )}
 
-        {/* Playback-rate menu — hidden when live */}
+        {/* Playback-rate menu — hidden when live, wrapped in NeedsRemote */}
         {!isLive && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              {canControl ? (
+          <NeedsRemote>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
                 <Button
                   size="sm"
                   variant="ghost"
                   className="shrink-0 gap-0.5 text-xs text-cream-300"
                   aria-label="playback speed"
+                  disabled={!canControl}
                 >
                   {media.playbackRate === 1 ? '1×' : `${media.playbackRate}×`}
                   <ChevronDown className="size-3" />
                 </Button>
-              ) : (
-                <span tabIndex={0} className="inline-flex">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="shrink-0 gap-0.5 text-xs text-cream-400 opacity-50"
-                    disabled
-                    aria-label="playback speed (disabled)"
+              </DropdownMenuTrigger>
+              {canControl && (
+                <DropdownMenuContent align="start" side="top">
+                  <DropdownMenuLabel>speed</DropdownMenuLabel>
+                  <DropdownMenuRadioGroup
+                    value={String(media.playbackRate)}
+                    onValueChange={handleRateChange}
                   >
-                    {media.playbackRate === 1 ? '1×' : `${media.playbackRate}×`}
-                    <ChevronDown className="size-3" />
-                  </Button>
-                </span>
+                    {RATE_OPTIONS.map((r) => (
+                      <DropdownMenuRadioItem key={r} value={String(r)}>
+                        {r === 1 ? 'normal (1×)' : `${r}×`}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
               )}
-            </DropdownMenuTrigger>
-            {canControl && (
-              <DropdownMenuContent align="start" side="top">
-                <DropdownMenuLabel>speed</DropdownMenuLabel>
-                <DropdownMenuRadioGroup
-                  value={String(media.playbackRate)}
-                  onValueChange={handleRateChange}
-                >
-                  {RATE_OPTIONS.map((r) => (
-                    <DropdownMenuRadioItem key={r} value={String(r)}>
-                      {r === 1 ? 'normal (1×)' : `${r}×`}
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            )}
-          </DropdownMenu>
+            </DropdownMenu>
+          </NeedsRemote>
         )}
       </div>
 
       {/* ------------------------------------------------------------------ */}
-      {/* CENTER — Remote ownership chip + action pills                        */}
+      {/* CENTER — Remote ownership chip (three §10 states) + actions          */}
       {/* ------------------------------------------------------------------ */}
       <div className="flex shrink-0 flex-col items-center gap-2">
-        {/* Controller chip — styled as a little badge */}
-        <div
-          className={cn(
-            'inline-flex max-w-[200px] items-center gap-1.5 truncate rounded-full px-3 py-1 text-xs font-semibold',
-            isController
-              ? 'border border-ember-600/40 bg-ember-950/60 text-ember-300'
-              : 'border border-couch-700 bg-couch-850 text-cream-400',
-          )}
-        >
-          <span className="truncate">
-            {isController
-              ? '🎮 you\'ve got the remote'
-              : controllerParticipant
-                ? `📺 ${controllerParticipant.name} has it`
-                : '📺 up for grabs'}
-          </span>
-        </div>
+        {/* §10 chip — three states only */}
+        {isUpForGrabs ? (
+          /* State 3: up for grabs — one-click grab for anyone */
+          <button
+            onClick={handleGrab}
+            className={cn(
+              'inline-flex max-w-[220px] items-center gap-1.5 truncate rounded-full px-3 py-1 text-xs font-semibold',
+              'border border-ember-500/30 bg-ember-950/40 text-ember-300',
+              'transition-all duration-200 hover:bg-ember-950/70 hover:border-ember-500/60',
+              'cursor-pointer glow-ember',
+              'animate-pulse-glow',
+            )}
+            aria-label="grab the remote"
+          >
+            <span className="truncate">🛋️ up for grabs — grab it</span>
+          </button>
+        ) : (
+          /* State 1 or 2: held */
+          <div
+            className={cn(
+              'inline-flex max-w-[200px] items-center gap-1.5 truncate rounded-full px-3 py-1 text-xs font-semibold',
+              isController
+                ? 'border border-ember-600/40 bg-ember-950/60 text-ember-300'
+                : 'border border-couch-700 bg-couch-850 text-cream-400',
+            )}
+          >
+            <span className="truncate">
+              {isController
+                ? "🎮 you've got the remote"
+                : `📺 ${controllerParticipant?.name ?? '…'} has it`}
+            </span>
+          </div>
+        )}
 
         {/* Action pills */}
         <div className="flex flex-wrap items-center justify-center gap-1.5">
-          {/* Non-controller: request button */}
-          {!isController && (
+          {/* Non-controller, non-up-for-grabs: request or chaos-grab */}
+          {!isController && !isUpForGrabs && (
             <>
               {isHostOnly ? (
-                <DisabledTooltipButton
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span
+                      tabIndex={0}
+                      className="inline-flex items-center rounded-full border border-couch-700 bg-couch-850 px-3 py-1 text-xs text-cream-500 cursor-not-allowed"
+                    >
+                      ask for the remote ✋
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>host-only room — only the host drives</TooltipContent>
+                </Tooltip>
+              ) : isChaos ? (
+                /* chaos mode: anyone can grab even if someone holds it */
+                <Button
                   size="sm"
                   variant="outline"
-                  tip="host-only room — only the host drives"
+                  onClick={handleGrab}
                   className="rounded-full text-xs"
                 >
-                  ask for the remote ✋
-                </DisabledTooltipButton>
+                  grab the remote 🫳
+                </Button>
               ) : selfHasRequested ? (
                 <span className="inline-flex items-center rounded-full border border-couch-700 bg-couch-850 px-3 py-1 text-xs text-cream-400">
                   asked ✋
@@ -448,7 +421,7 @@ export function RemoteControls() {
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={handleRequestRemote}
+                  onClick={() => send({ type: 'remote:request' })}
                   className="rounded-full text-xs"
                 >
                   ask for the remote ✋
@@ -457,69 +430,64 @@ export function RemoteControls() {
             </>
           )}
 
-          {/* Controller: pending requests + pass menu */}
-          {isController && (
-            <>
-              {/* Pending request chips */}
-              {visiblePendingRequests.map((reqId) => {
-                const requester = state.participants[reqId];
-                if (!requester) return null;
-                return (
-                  <span
-                    key={reqId}
-                    className="inline-flex items-center gap-1 rounded-full border border-couch-650 bg-couch-800 px-2 py-0.5 text-xs text-cream-200"
-                  >
-                    <span className="max-w-[72px] truncate">{requester.name}</span>
-                    {/* Grant */}
-                    <button
-                      onClick={() => handleGrantRequest(reqId)}
-                      className="ml-0.5 rounded p-0.5 text-moss-400 transition-colors hover:bg-moss-900/40"
-                      aria-label={`grant remote to ${requester.name}`}
-                    >
-                      <Check className="size-3" />
-                    </button>
-                    {/* Dismiss (local only) */}
-                    <button
-                      onClick={() => handleDismissRequest(reqId)}
-                      className="rounded p-0.5 text-cream-500 transition-colors hover:bg-couch-750"
-                      aria-label={`dismiss request from ${requester.name}`}
-                    >
-                      <X className="size-3" />
-                    </button>
-                  </span>
-                );
-              })}
+          {/* Controller: pending requests (visible only to holder + host per §10) */}
+          {canSeePendingRequests && visiblePendingRequests.map((reqId) => {
+            const requester = state.participants[reqId];
+            if (!requester) return null;
+            return (
+              <span
+                key={reqId}
+                className="inline-flex items-center gap-1 rounded-full border border-couch-650 bg-couch-800 px-2 py-0.5 text-xs text-cream-200"
+              >
+                <span className="max-w-[72px] truncate">{requester.name}</span>
+                {/* Grant */}
+                <button
+                  onClick={() => handleGrantRequest(reqId)}
+                  className="ml-0.5 rounded p-0.5 text-moss-400 transition-colors hover:bg-moss-900/40"
+                  aria-label={`grant remote to ${requester.name}`}
+                >
+                  <Check className="size-3" />
+                </button>
+                {/* Dismiss (local only) */}
+                <button
+                  onClick={() => handleDismissRequest(reqId)}
+                  className="rounded p-0.5 text-cream-500 transition-colors hover:bg-couch-750"
+                  aria-label={`dismiss request from ${requester.name}`}
+                >
+                  <X className="size-3" />
+                </button>
+              </span>
+            );
+          })}
 
-              {/* Pass the remote dropdown */}
-              {otherParticipants.length > 0 && (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button size="sm" variant="outline" className="gap-1 rounded-full text-xs">
-                      pass the remote
-                      <ChevronDown className="size-3" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="center" side="top">
-                    <DropdownMenuLabel>pass to…</DropdownMenuLabel>
-                    {otherParticipants.map((p) => (
-                      <DropdownMenuItem
-                        key={p.id}
-                        onClick={() => handlePassRemote(p.id)}
-                      >
-                        <span
-                          className="mr-1 size-2 shrink-0 rounded-full"
-                          style={{ backgroundColor: p.accent }}
-                        />
-                        {p.name}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              )}
-            </>
+          {/* Controller: pass the remote dropdown */}
+          {isController && otherParticipants.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="outline" className="gap-1 rounded-full text-xs">
+                  pass the remote
+                  <ChevronDown className="size-3" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="center" side="top">
+                <DropdownMenuLabel>pass to…</DropdownMenuLabel>
+                {otherParticipants.map((p) => (
+                  <DropdownMenuItem
+                    key={p.id}
+                    onClick={() => handlePassRemote(p.id)}
+                  >
+                    <span
+                      className="mr-1 size-2 shrink-0 rounded-full"
+                      style={{ backgroundColor: p.accent }}
+                    />
+                    {p.name}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
 
-          {/* Host or controller: start a ready check (hidden when one is already active) */}
+          {/* Host or controller: start a ready check */}
           {(isHost || isController) && !state.readyCheck?.active && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -577,10 +545,10 @@ export function RemoteControls() {
           <TooltipContent>your volume only</TooltipContent>
         </Tooltip>
 
-        {/* Sync indicator (zero-prop sibling component) */}
+        {/* Sync indicator */}
         <SyncIndicator />
 
-        {/* Emergency pause — anyone can trigger, wiggles on hover */}
+        {/* Emergency pause — anyone, red, wiggles on hover */}
         <Tooltip>
           <TooltipTrigger asChild>
             <Button

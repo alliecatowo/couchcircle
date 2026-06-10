@@ -34,10 +34,12 @@ import { cn } from '@/lib/utils';
 import { YouTubePlayer } from './players/YouTubePlayer';
 import { DirectUrlPlayer } from './players/DirectUrlPlayer';
 import { ScreenSharePlayer } from './players/ScreenSharePlayer';
+import { useTheater } from '@/lib/theater';
 import { SyncIndicator } from './SyncIndicator';
 import { SparkCountdown } from './SparkCountdown';
 import { ReactionLayer } from './ReactionLayer';
 import { ExplorePanel } from './ExplorePanel';
+import { TheaterGallery } from './TheaterGallery';
 
 // ---------------------------------------------------------------------------
 // Quick-add catalog for the idle screen
@@ -193,6 +195,33 @@ function BlockedBanner() {
 }
 
 // ---------------------------------------------------------------------------
+// Projector handoff placeholder — shown INSIDE the bezel on the MAIN window
+// while this window's companion projector popup is open (§1/§3). The local
+// player is torn down (engine.setAdapter(null), no double audio) and replaced
+// with this card; closing the projector restores the player.
+// ---------------------------------------------------------------------------
+
+function ProjectorPlaceholder() {
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-couch-950 px-6 text-center">
+      <div
+        className="animate-flicker pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(240,139,52,0.08),transparent_62%)]"
+        aria-hidden
+      />
+      <span className="animate-float-bob relative z-10 text-5xl" aria-hidden>
+        🎬
+      </span>
+      <p className="relative z-10 font-display text-xl text-cream-100">
+        rolling on the projector
+      </p>
+      <p className="relative z-10 max-w-xs font-body text-sm text-cream-400">
+        the movie is up on the big screen — close that window to bring it back here
+      </p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Click-shield — transparent layer that EATS clicks on the player surface so
 // viewers can't drive YouTube's own play/scrubber and desync. A tap flashes a
 // tiny "use the remote" hint. Sits ABOVE the iframe/video, BELOW our overlays.
@@ -280,9 +309,16 @@ export function MediaStage() {
   const room = useRoom();
   const { state, canControl, send } = room;
 
+  // theater mode + the projector handoff store (§1/§2). Falls back to inert
+  // defaults when no TheaterProvider is mounted (so this never crashes).
+  const { theater, toggle: toggleTheater, projectorOpen } = useTheater();
+
   // ---- refs that always hold the latest values (avoid stale closures) ----
   const roomRef = React.useRef(room);
   roomRef.current = room;
+
+  // the bezel element — target for the best-effort Fullscreen API in theater.
+  const stageRef = React.useRef<HTMLDivElement | null>(null);
 
   // ---- the single SyncEngine for this room view ----
   const [engine, setEngine] = React.useState<SyncEngine | null>(null);
@@ -309,6 +345,49 @@ export function MediaStage() {
   React.useEffect(() => {
     if (engine && state) engine.applyMediaState(state.media);
   }, [engine, state]);
+
+  // ---- projector handoff (§1/§3): while THIS window's projector popup is open,
+  // tear the local adapter off the engine so there's no double audio. When it
+  // closes, the player remounts (it's not rendered while projectorOpen) and
+  // re-registers its adapter, so we only need to detach here.
+  React.useEffect(() => {
+    if (engine && projectorOpen) engine.setAdapter(null);
+  }, [engine, projectorOpen]);
+
+  // ---- theater keyboard shortcuts (§2): 't' toggles, 'Esc' exits ----
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      // ignore while typing in a field
+      const el = e.target as HTMLElement | null;
+      const typing =
+        !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+      if (typing) return;
+      if (e.key === 't' || e.key === 'T') {
+        e.preventDefault();
+        toggleTheater();
+      } else if (e.key === 'Escape' && theater) {
+        e.preventDefault();
+        toggleTheater();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [theater, toggleTheater]);
+
+  // ---- best-effort Fullscreen API on the stage element (§2) ----
+  React.useEffect(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    if (theater) {
+      if (!document.fullscreenElement) {
+        el.requestFullscreen?.().catch(() => {
+          /* fullscreen is best-effort — letterbox still applies */
+        });
+      }
+    } else if (document.fullscreenElement) {
+      document.exitFullscreen?.().catch(() => {});
+    }
+  }, [theater]);
 
   // ---- quick-add → auto-play once the new item shows up (pending ref) ----
   // Holds the `source` we just queued so we can match the new item across the
@@ -353,8 +432,16 @@ export function MediaStage() {
   }, [state?.queue, media?.queueItemId]);
 
   // adapter says we should be showing a player, but the item is gone → idle.
+  // While the projector popup owns the movie (§1/§3) we never render the local
+  // player — the placeholder card stands in and the engine has no adapter.
   const adapter = media?.adapter ?? 'idle';
-  const showPlayer = adapter !== 'idle' && adapter !== 'hosted-upload' && !!currentItem;
+  const hasItem = adapter !== 'idle' && adapter !== 'hosted-upload' && !!currentItem;
+  const showPlayer = hasItem && !projectorOpen;
+  // double-click on the TV toggles theater (§2). Ignored on the idle screen so
+  // quick-add buttons aren't disturbed.
+  const onStageDoubleClick = (): void => {
+    if (hasItem) toggleTheater();
+  };
 
   return (
     <section
@@ -364,6 +451,9 @@ export function MediaStage() {
         // the WALL: a vertical gradient, not a void
         'bg-gradient-to-b from-couch-900 to-couch-950',
         'border border-couch-700 shadow-[var(--shadow-couch)]',
+        // theater: melt the wall to near-black so the picture goes full-bleed
+        // letterbox; the parent (RoomShell) hides the surrounding chrome.
+        theater && 'border-transparent bg-couch-950 from-couch-950 to-black',
       )}
     >
       {/* the lamp: a soft ember glow pooling in from the upper-left corner.
@@ -392,35 +482,55 @@ export function MediaStage() {
       />
 
       {/* centering frame — fills the wall, centers the TV. This gives the bezel
-          a definite parent box so its max-h-full/max-w-full caps resolve. */}
-      <div className="relative z-10 flex h-full w-full items-center justify-center p-4">
+          a definite parent box so its max-h-full/max-w-full caps resolve. In
+          theater we drop the padding so the picture letterboxes edge-to-edge. */}
+      <div
+        className={cn(
+          'relative z-10 flex h-full w-full items-center justify-center',
+          theater ? 'p-0' : 'p-4',
+        )}
+      >
         {/* ---- the contained TV, in a bezel ----
             aspect-video drives a 16:9 box off w-full (a definite width basis),
             and max-h-full caps its height against this now-definite parent so it
             letterbox-fits: as wide as fits, never taller than the area. No
-            percentage/auto-width collapse. */}
+            percentage/auto-width collapse.
+
+            In THEATER the bezel chrome melts away (no ring/padding/shadow, square
+            corners) so the picture is bezel-less full-bleed letterbox on the
+            wall — only the vignette frames it. */}
         <div
+          ref={stageRef}
+          onDoubleClick={onStageDoubleClick}
           className={cn(
-            'tv-glow relative aspect-video max-h-full w-full max-w-full overflow-hidden rounded-2xl',
-            // the bezel: a warm hairline ring (DESIGN edge token) + the lifted
-            // shadow token so the set reads as a physical object on the wall,
-            // consistent across every adapter.
-            'bg-couch-950 p-1.5 ring-1 ring-couch-650',
-            'shadow-[var(--shadow-lifted)]',
+            'relative aspect-video max-h-full w-full max-w-full overflow-hidden',
+            theater
+              ? 'rounded-none bg-black'
+              : 'tv-glow rounded-2xl bg-couch-950 p-1.5 ring-1 ring-couch-650 shadow-[var(--shadow-lifted)]',
           )}
         >
-          {/* ambient glow pooling behind the set */}
-          <div
-            className="pointer-events-none absolute -inset-6 -z-10 rounded-[2.75rem] bg-[radial-gradient(ellipse_at_center,rgba(240,139,52,0.14),transparent_70%)] blur-2xl"
-            aria-hidden
-          />
+          {/* ambient glow pooling behind the set — off in theater */}
+          {!theater && (
+            <div
+              className="pointer-events-none absolute -inset-6 -z-10 rounded-[2.75rem] bg-[radial-gradient(ellipse_at_center,rgba(240,139,52,0.14),transparent_70%)] blur-2xl"
+              aria-hidden
+            />
+          )}
 
           {/* the picture — fills the bezel inside its p-1.5 frame (inset-1.5
               matches the bezel padding so the warm ring stays visible); slight
-              scale crop hides the YT branding row edges */}
-          <div className="absolute inset-1.5 overflow-hidden rounded-xl bg-couch-950">
+              scale crop hides the YT branding row edges. In theater inset-0 +
+              square corners so it reaches every edge. */}
+          <div
+            className={cn(
+              'absolute overflow-hidden bg-couch-950',
+              theater ? 'inset-0 rounded-none' : 'inset-1.5 rounded-xl',
+            )}
+          >
             <div className="absolute inset-0 z-0 scale-[1.01]">
-              {engine && showPlayer && currentItem ? (
+              {projectorOpen ? (
+                <ProjectorPlaceholder />
+              ) : engine && showPlayer && currentItem ? (
                 <StagePlayer engine={engine} item={currentItem} adapter={adapter} />
               ) : (
                 <IdleScreen canControl={canControl} onQuickAdd={handleQuickAdd} />
@@ -433,11 +543,25 @@ export function MediaStage() {
                 reach the embed's own ▶ (see ClickShieldGate). */}
             {showPlayer && <ClickShieldGate adapter={adapter} />}
 
+            {/* theater vignette — a soft dark frame so a full-bleed picture still
+                reads as "on the wall", never a harsh rectangle. Behind overlays,
+                above the picture. */}
+            {theater && (
+              <div
+                className="pointer-events-none absolute inset-0 z-10 bg-[radial-gradient(130%_120%_at_50%_50%,transparent_58%,rgba(16,11,9,0.55)_100%)]"
+                aria-hidden
+              />
+            )}
+
             {/* overlays — all ABOVE the shield */}
             <ReactionLayer />
             <SparkCountdown />
             {engine && <AutoplayGate engine={engine} adapter={adapter} />}
             <UnmuteGate />
+
+            {/* the peanut gallery (§9) — the back row, mounted only in theater.
+                Honours galleryVisible, never hidden by chromeVisible. */}
+            {theater && <TheaterGallery />}
 
             {/* sync pill, tucked into the top-right of the screen */}
             <div className="pointer-events-auto absolute right-3 top-3 z-30">

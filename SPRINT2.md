@@ -223,3 +223,38 @@ payoff pipeline. Nothing gets its own bespoke chrome ever again.
   INTO the RitualCard grammar (components/room/rituals/RitualCard.tsx + per-kind
   bodies) so the system ships consolidated, not as a sixth pattern. Server keeps
   per-kind state but the reducers share the window/tally/timer helpers.
+
+## 13. THE VIEW SYSTEM (supersedes §1 naming + §2; wave C implements)
+
+Step-back ruling: view modes use the grammar every streaming site already taught
+people. No invented nouns, no lore. "The projector" concept is DEAD as a concept;
+the underlying role mechanism survives as a plain **popout player**.
+
+Four view states + per-panel visibility, all orthogonal:
+1. **default** — everything visible.
+2. **theater mode** (`t`, YouTube-style): side column collapses, seating compresses to
+   a slim strip, sesh tray stays (slim), TV gets big. Still normal page chrome
+   (top bar stays). This is NOT fullscreen.
+3. **fullscreen** (`f`, double-click TV): real browser fullscreen on the stage;
+   auto-hiding overlay controls (3s idle); the peanut gallery (§9) lives here —
+   silhouettes + speech bubbles along the bottom. Esc exits to whatever mode you
+   were in.
+4. **popout player**: TopBar button "pop out the video ⧉" opens the bare-video
+   window (the existing /screen route + role:'projector' machinery — rename ALL
+   user-facing copy: window title/status say "couchcircle — video", main window
+   placeholder says "video popped out ⧉ (click to bring it back)"). No
+   personality, it's a utility.
+- **Panel visibility**: every panel individually collapsible with persisted
+  preference (localStorage `couchcircle:panels`): queue, chat/activity, seating,
+  sesh tray. Chevron affordance in each panel's header + a single compact "view"
+  popover in the TopBar (checkboxes for each panel + theater/fullscreen entries with
+  their shortcuts). Collapsed side panels become a slim rail of icons (click =
+  re-open). Seating collapse = slim presence strip (dots+names), never fully gone.
+- useTheater() generalizes to useView(): { mode: 'default'|'theater'|'fullscreen';
+  setMode; chromeVisible; panels: Record<'queue'|'chat'|'seating'|'sesh', boolean>;
+  togglePanel }. Keyboard: t theater, f fullscreen, esc back.
+- Concept hygiene sweep with this change: hunt remaining cutesy-but-confusing copy.
+  KEEP (earned): the couch, crew, creature, glow, vibe, the remote, up next, sesh
+  mode, rituals. KILL (cruft): "the projector", any "channel surf" phrasing that
+  obscures what explore does (panel title becomes "explore — free stuff to watch",
+  button "browse free movies & tv 📺").

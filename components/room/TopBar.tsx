@@ -2,8 +2,9 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Lock, Settings, Sparkles, Check } from 'lucide-react';
+import { Lock, Settings, Sparkles, Check, MonitorPlay } from 'lucide-react';
 import { useRoom } from '@/lib/realtime/room-context';
+import { useProjectorOpen, setProjectorOpen } from '@/lib/theater';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
@@ -38,6 +39,65 @@ export function TopBar({ onOpenSettings }: { onOpenSettings: () => void }) {
       if (copyTimer.current) clearTimeout(copyTimer.current);
     },
     [],
+  );
+
+  // ---- the projector (§1): throw the movie to a companion big-screen window ----
+  const projectorOpen = useProjectorOpen();
+  // Handle to the popup window so we can re-focus it and poll for .closed.
+  const projectorWin = useRef<Window | null>(null);
+  const projectorPoll = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopProjectorPoll = useCallback(() => {
+    if (projectorPoll.current) {
+      clearInterval(projectorPoll.current);
+      projectorPoll.current = null;
+    }
+  }, []);
+
+  const toggleProjector = useCallback(() => {
+    // already open → close it (the poll below will also catch a manual close)
+    if (projectorWin.current && !projectorWin.current.closed) {
+      projectorWin.current.close();
+      projectorWin.current = null;
+      stopProjectorPoll();
+      setProjectorOpen(false);
+      return;
+    }
+    if (!joinCode) return;
+    const win = window.open(
+      `/r/${joinCode}/screen`,
+      'couchprojector',
+      'popup,width=1280,height=720',
+    );
+    if (!win) {
+      // popup blocked — leave the main player as-is; nothing to coordinate
+      return;
+    }
+    projectorWin.current = win;
+    setProjectorOpen(true);
+    // poll for the window being closed (user hits ✕) every 2s and restore.
+    stopProjectorPoll();
+    projectorPoll.current = setInterval(() => {
+      if (!projectorWin.current || projectorWin.current.closed) {
+        projectorWin.current = null;
+        stopProjectorPoll();
+        setProjectorOpen(false);
+      }
+    }, 2_000);
+  }, [joinCode, stopProjectorPoll]);
+
+  // On unmount, close the projector + clear the store so we never strand the
+  // main window in the "rolling on the projector" placeholder.
+  useEffect(
+    () => () => {
+      stopProjectorPoll();
+      if (projectorWin.current && !projectorWin.current.closed) {
+        projectorWin.current.close();
+      }
+      projectorWin.current = null;
+      setProjectorOpen(false);
+    },
+    [stopProjectorPoll],
   );
 
   const copyInvite = useCallback(() => {
@@ -157,6 +217,30 @@ export function TopBar({ onOpenSettings }: { onOpenSettings: () => void }) {
           </Tooltip>
         )}
       </div>
+
+      {/* throw it to the big screen — opens the companion projector window */}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant={projectorOpen ? 'accent' : 'ghost'}
+            size="sm"
+            onClick={toggleProjector}
+            disabled={!joinCode}
+            className="gap-1.5"
+            aria-label={projectorOpen ? 'close the projector' : 'throw it to the big screen'}
+          >
+            <MonitorPlay />
+            <span className="hidden md:inline">
+              {projectorOpen ? 'close the projector' : 'big screen 📽️'}
+            </span>
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>
+          {projectorOpen
+            ? 'the movie is rolling on the projector window'
+            : 'throw it to the big screen 📽️'}
+        </TooltipContent>
+      </Tooltip>
 
       <ConnectionHealth />
 

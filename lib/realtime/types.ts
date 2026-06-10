@@ -18,6 +18,17 @@ import type {
 /** Lifecycle of the underlying WebSocket as surfaced to the UI. */
 export type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
 
+/**
+ * How this client is attached to the couch (§1 projector).
+ *
+ * - `crew` (default): a real participant — takes a seat, drives the room through
+ *   the JoinGate flow, persists identity.
+ * - `projector`: a companion big-screen window. It auto-joins on socket open with
+ *   a fresh ephemeral identity (never persisted), takes no seat, and is a pure
+ *   viewer (its conn→id mapping is still registered so webrtc relays reach it).
+ */
+export type RoomRole = 'crew' | 'projector';
+
 /** Phases the join flow moves through, from code resolution to a live seat. */
 export type JoinPhase =
   | 'resolving'        // looking up join code via lobby
@@ -53,6 +64,12 @@ export interface RoomContextValue {
   self: Participant | null;
   isHost: boolean;
   isController: boolean;
+  /**
+   * How this client is attached to the couch (§1). `crew` for a normal seat,
+   * `projector` for a companion big-screen window that auto-joins as a pure
+   * viewer. Defaults to `crew` when the provider is mounted without a role.
+   */
+  role: RoomRole;
   /** true when this client may issue media/queue control commands right now */
   canControl: boolean;
   connectionStatus: ConnectionStatus;

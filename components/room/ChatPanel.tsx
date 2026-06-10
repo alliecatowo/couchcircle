@@ -9,6 +9,7 @@ import { REACTION_EMOJIS } from '@/shared/constants';
 import { cn, formatRelativeTime } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { ActiveRitualCard } from './rituals/ActiveRitualCard';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -101,6 +102,13 @@ export function ChatPanel() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
+      {/* Pinned ritual card — chat is the table; the active ritual (game / toast /
+          ready / snack) lives at the top of the scroll area, above the messages.
+          Renders null when no ritual is live. */}
+      <div className="shrink-0 px-3 pt-3 empty:hidden">
+        <ActiveRitualCard />
+      </div>
+
       {/* Message list */}
       <div className="relative min-h-0 flex-1">
         <div

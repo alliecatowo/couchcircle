@@ -17,9 +17,12 @@ import React, {
   useState,
 } from 'react';
 
-import type { IdentitySnapshot, RoomState } from '@/shared/protocol';
+import { nanoid } from 'nanoid';
+
+import type { AvatarId, IdentitySnapshot, RoomState } from '@/shared/protocol';
 import { canControl as protocolCanControl } from '@/shared/protocol';
 import { normalizeJoinCode } from '@/shared/join-codes';
+import { ACCENT_COLORS } from '@/shared/constants';
 
 import {
   createRoomConnection,
@@ -31,6 +34,7 @@ import type {
   ReactionBurst,
   RoomConnection,
   RoomContextValue,
+  RoomRole,
 } from '@/lib/realtime/types';
 
 // ---------------------------------------------------------------------------
@@ -77,11 +81,30 @@ const RoomContext = createContext<RoomContextValue | null>(null);
 // Provider
 // ---------------------------------------------------------------------------
 
+/**
+ * Build the fresh, never-persisted ephemeral identity a projector window joins
+ * with (§1). The id is prefixed `prj_` so the server (and any diagnostics) can
+ * spot a projector; the accent is any warm swatch.
+ */
+function makeProjectorIdentity(): IdentitySnapshot {
+  const accent =
+    ACCENT_COLORS[Math.floor(Math.random() * ACCENT_COLORS.length)] ?? '#ff9d3d';
+  return {
+    id: `prj_${nanoid()}`,
+    name: 'the projector',
+    avatar: 'blanket' as AvatarId,
+    accent,
+  };
+}
+
 export function RoomProvider({
   code: rawCode,
+  role = 'crew',
   children,
 }: {
   code: string;
+  /** `crew` (default) or `projector` — see {@link RoomRole}. */
+  role?: RoomRole;
   children: React.ReactNode;
 }): React.ReactElement {
   const code = normalizeJoinCode(rawCode);
@@ -123,6 +146,15 @@ export function RoomProvider({
    * queue the opts here and fire the actual room:join when the socket opens.
    */
   const pendingJoinRef = useRef<{ identity: IdentitySnapshot; password?: string } | null>(null);
+  /**
+   * Projector windows (§1) auto-join on socket open with a fresh ephemeral
+   * identity that is NEVER persisted. We mint it once and keep it in a ref so
+   * reconnects reattach the same projector rather than spawning a new one.
+   */
+  const projectorIdentityRef = useRef<IdentitySnapshot | null>(null);
+  if (role === 'projector' && !projectorIdentityRef.current) {
+    projectorIdentityRef.current = makeProjectorIdentity();
+  }
 
   // ---- auto-clear lastError after 6s ----
   function setLastErrorWithAutoClear(
@@ -181,6 +213,9 @@ export function RoomProvider({
       const msg: Parameters<typeof conn.send>[0] = {
         type: 'room:join',
         participant: identity,
+        // A projector attaches as a pure viewer (§1) — the server skips the seat
+        // + participant entry and only registers its conn→id for webrtc relays.
+        ...(role === 'projector' ? { role: 'projector' as const } : {}),
         ...(password ? { password } : {}),
         ...(pending
           ? {
@@ -198,7 +233,7 @@ export function RoomProvider({
       conn.send(msg);
       setJoinPhase('joining');
     },
-    [code],
+    [code, role],
   );
 
   // ---- resend room:join on reconnect ----
@@ -210,9 +245,10 @@ export function RoomProvider({
     conn.send({
       type: 'room:join',
       participant: opts.identity,
+      ...(role === 'projector' ? { role: 'projector' as const } : {}),
       ...(opts.password ? { password: opts.password } : {}),
     });
-  }, []);
+  }, [role]);
 
   // ---- bootstrap: resolve code, create connection ----
   useEffect(() => {
@@ -268,6 +304,12 @@ export function RoomProvider({
           console.debug('[couchcircle:join] draining queued join on open', pending);
           // Re-invoke the full join() logic so pending-create is picked up correctly
           join(pending);
+        } else if (role === 'projector' && projectorIdentityRef.current) {
+          // Projector windows (§1) skip the JoinGate entirely: the moment the
+          // socket is open we auto-join as a pure viewer with the ephemeral
+          // identity. Never persisted; reconnects reuse the same identity ref.
+          console.debug('[couchcircle:join] projector auto-join on open');
+          join({ identity: projectorIdentityRef.current });
         }
       };
 
@@ -386,6 +428,7 @@ export function RoomProvider({
     self,
     isHost,
     isController,
+    role,
     canControl,
     connectionStatus,
     joinPhase,

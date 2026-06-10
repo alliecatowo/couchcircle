@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils';
 import { useRoom } from '@/lib/realtime/room-context';
 import { STATUS_META } from '@/shared/constants';
 import { StatusPicker } from './StatusPicker';
-import type { Participant, ChatMessage } from '@/shared/protocol';
+import type { Participant, ChatMessage, RoomEvent } from '@/shared/protocol';
 // AvatarSprite and statusToMood come from the avatars sibling task (§13 contract).
 import { AvatarSprite, statusToMood } from '@/components/avatars';
 
@@ -94,6 +94,126 @@ function useChatSnippet(participantId: string): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// Synchronized ritual poses (SPRINT2 §8 + §12)
+//
+// On a ritual payoff event the crew plays a brief overlay emote above each head:
+//   hit (toke spark)  → 💨   on the rotation members
+//   raise (drink/clink) → 🥂  on everyone in the circle
+//   cheer (bingo / ready) → 🎉 on everyone
+// We diff state.events by id at the module level (shared across all avatar
+// instances) and stamp a per-participant pose with a TTL the components read.
+// ---------------------------------------------------------------------------
+
+type Pose = 'hit' | 'raise' | 'cheer';
+
+const POSE_EMOTE: Record<Pose, string> = {
+  hit: '💨',
+  raise: '🥂',
+  cheer: '🎉',
+};
+
+const POSE_TTL_MS = 1500;
+
+// participantId → { pose, until } — module-level so every avatar shares the stamp.
+const poseStamps = new Map<string, { pose: Pose; until: number }>();
+// events we've already turned into poses.
+const seenPoseEventIds = new Set<string>();
+let poseInitialized = false;
+// subscribers re-render when a new pose lands.
+const poseListeners = new Set<() => void>();
+
+function notifyPoses() {
+  for (const l of poseListeners) l();
+}
+
+function stampPose(id: string, pose: Pose) {
+  poseStamps.set(id, { pose, until: Date.now() + POSE_TTL_MS });
+}
+
+/**
+ * Turn a fresh event into ritual poses across the relevant crew. Returns true when
+ * anything was stamped (so the caller can notify + schedule a clear).
+ */
+function applyEventPoses(evt: RoomEvent, connectedIds: string[]): boolean {
+  const text = evt.text ?? '';
+  const lower = text.toLowerCase();
+  const emoji = evt.emoji ?? '';
+
+  // toke spark zero → everyone who sparked hits — "💨 BLAZE IT …"
+  if (text.includes('BLAZE IT') || emoji === '💨') {
+    for (const id of connectedIds) stampPose(id, 'hit');
+    return true;
+  }
+  // individual hit — "💨 {name} is hitting it" (actorId present)
+  if (evt.kind === 'sesh' && emoji === '💨' && evt.actorId) {
+    stampPose(evt.actorId, 'hit');
+    return true;
+  }
+  // toast clink → the whole circle raises — "🥂 CLINK …"
+  if (text.includes('CLINK') || (emoji === '🥂' && lower.includes('raised'))) {
+    for (const id of connectedIds) stampPose(id, 'raise');
+    return true;
+  }
+  // everyone's ready → cheer
+  if (lower.includes('ready') && lower.includes('everyone')) {
+    for (const id of connectedIds) stampPose(id, 'cheer');
+    return true;
+  }
+  // movie bingo → cheer
+  if (text.includes('BINGO')) {
+    for (const id of connectedIds) stampPose(id, 'cheer');
+    return true;
+  }
+  return false;
+}
+
+/** Subscribe one avatar instance to its own current pose (or null). */
+function useRitualPose(participantId: string): Pose | null {
+  const { state } = useRoom();
+  const [, force] = React.useReducer((n: number) => n + 1, 0);
+
+  // Drive event diffing from a single shared place — every instance runs it, but
+  // the seen-set + initialized guard make it idempotent.
+  React.useEffect(() => {
+    if (!state) return;
+    const listener = () => force();
+    poseListeners.add(listener);
+
+    const connectedIds = Object.values(state.participants)
+      .filter((p) => p.connected)
+      .map((p) => p.id);
+
+    if (!poseInitialized) {
+      for (const evt of state.events) seenPoseEventIds.add(evt.id);
+      poseInitialized = true;
+      return () => {
+        poseListeners.delete(listener);
+      };
+    }
+
+    let stamped = false;
+    for (const evt of state.events) {
+      if (seenPoseEventIds.has(evt.id)) continue;
+      seenPoseEventIds.add(evt.id);
+      if (applyEventPoses(evt, connectedIds)) stamped = true;
+    }
+    if (stamped) {
+      notifyPoses();
+      // clear after the TTL so the emote fades
+      window.setTimeout(notifyPoses, POSE_TTL_MS + 50);
+    }
+
+    return () => {
+      poseListeners.delete(listener);
+    };
+  }, [state]);
+
+  const stamp = poseStamps.get(participantId);
+  if (stamp && stamp.until > Date.now()) return stamp.pose;
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // StatusBubble — small pill shown above the avatar
 // ---------------------------------------------------------------------------
 
@@ -151,6 +271,25 @@ function ChatBubble({ text }: { text: string }) {
 }
 
 // ---------------------------------------------------------------------------
+// PoseEmote — the synchronized ritual emote that pops above the head
+// ---------------------------------------------------------------------------
+
+function PoseEmote({ pose }: { pose: Pose }) {
+  return (
+    <motion.span
+      className="pointer-events-none absolute -top-2 z-30 select-none text-xl leading-none"
+      initial={{ opacity: 0, scale: 0.5, y: 4 }}
+      animate={{ opacity: [0, 1, 1, 0], scale: [0.5, 1.25, 1, 1], y: [4, -6, -8, -12] }}
+      exit={{ opacity: 0, y: -16 }}
+      transition={{ duration: 1.4, times: [0, 0.25, 0.7, 1], ease: 'easeOut' }}
+      aria-hidden
+    >
+      {POSE_EMOTE[pose]}
+    </motion.span>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // ParticipantAvatar
 // ---------------------------------------------------------------------------
 
@@ -160,6 +299,7 @@ export function ParticipantAvatar({ participant, size = 'md' }: ParticipantAvata
   const pxSize = SIZE_PX[size];
   const mood = statusToMood(participant.status);
   const chatSnippet = useChatSnippet(participant.id);
+  const ritualPose = useRitualPose(participant.id);
   const isDisconnected = !participant.connected;
 
   // Randomize bob animation timing per-instance so avatars don't move in sync
@@ -186,6 +326,13 @@ export function ParticipantAvatar({ participant, size = 'md' }: ParticipantAvata
 
       {/* Status bubble */}
       <StatusBubble status={participant.status} accent={participant.accent} />
+
+      {/* Synchronized ritual pose — a brief emote pop above the head on a payoff */}
+      <AnimatePresence>
+        {ritualPose && !isDisconnected && (
+          <PoseEmote key={ritualPose} pose={ritualPose} />
+        )}
+      </AnimatePresence>
 
       {/* Disconnected zzz indicator */}
       {isDisconnected && (
