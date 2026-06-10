@@ -1,6 +1,8 @@
 # CouchCircle
 
 > **watch together, actually together.**
+>
+> 🛋️ **live at [couchcircle.vercel.app](https://couchcircle.vercel.app)** — roll up a couch, send the code to your crew.
 
 CouchCircle is a cozy real-time browser watch-party app built for the group chat that actually shows up. one room, one shared queue, the remote gets passed around — YouTube, direct media links, or P2P screen share, all kept in sync by an authoritative server clock so nobody's a scene ahead. throw in a social layer for the rituals that go along with watching things, a spark countdown that fires at the exact same moment for everyone, and a blunt rotation tracker because passing things around a couch — even a digital one — is a whole vibe. no accounts, no payments, no algorithms. just your friends, melted into a couch.
 
