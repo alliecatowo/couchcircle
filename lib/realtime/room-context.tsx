@@ -1,0 +1,385 @@
+'use client';
+
+/**
+ * CouchCircle — React room context (§8 of ARCHITECTURE.md).
+ *
+ * Provides `<RoomProvider>` (wraps a room by join-code) and `useRoom()` (the
+ * consumer hook). All `components/room/**` components rely on this context and
+ * must render inside a `<RoomProvider>`.
+ */
+
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
+
+import type { IdentitySnapshot, RoomState } from '@/shared/protocol';
+import { canControl as protocolCanControl } from '@/shared/protocol';
+import { normalizeJoinCode } from '@/shared/join-codes';
+
+import {
+  createRoomConnection,
+  resolveCode,
+} from '@/lib/realtime/connection';
+import type {
+  ConnectionStatus,
+  JoinPhase,
+  ReactionBurst,
+  RoomConnection,
+  RoomContextValue,
+} from '@/lib/realtime/types';
+
+// ---------------------------------------------------------------------------
+// Session-storage key helper
+// ---------------------------------------------------------------------------
+
+/** Shape stored by the landing page when creating a new room. */
+interface PendingCreate {
+  roomId: string;
+  roomName?: string;
+  password?: string;
+  seedDemo?: boolean;
+}
+
+function pendingCreateKey(code: string): string {
+  return `couchcircle:pending-create:${code}`;
+}
+
+function readPendingCreate(code: string): PendingCreate | null {
+  try {
+    const raw = sessionStorage.getItem(pendingCreateKey(code));
+    if (!raw) return null;
+    return JSON.parse(raw) as PendingCreate;
+  } catch {
+    return null;
+  }
+}
+
+function deletePendingCreate(code: string): void {
+  try {
+    sessionStorage.removeItem(pendingCreateKey(code));
+  } catch {
+    // SSR / private browsing — silently ignore
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Context
+// ---------------------------------------------------------------------------
+
+const RoomContext = createContext<RoomContextValue | null>(null);
+
+// ---------------------------------------------------------------------------
+// Provider
+// ---------------------------------------------------------------------------
+
+export function RoomProvider({
+  code: rawCode,
+  children,
+}: {
+  code: string;
+  children: React.ReactNode;
+}): React.ReactElement {
+  const code = normalizeJoinCode(rawCode);
+
+  // ---- core state ----
+  const [state, setState] = useState<RoomState | null>(null);
+  const [selfId, setSelfId] = useState<string>('');
+  const [connectionStatus, setConnectionStatus] =
+    useState<ConnectionStatus>('connecting');
+  const [joinPhase, setJoinPhase] = useState<JoinPhase>('resolving');
+  // Mirror of joinPhase for reads inside the long-lived `error` socket handler,
+  // whose closure (registered once per `code`) would otherwise see a stale phase.
+  const joinPhaseRef = useRef<JoinPhase>('resolving');
+  joinPhaseRef.current = joinPhase;
+  const [joinError, setJoinError] = useState<string | null>(null);
+  const [lastError, setLastError] = useState<{
+    code: string;
+    message: string;
+    ts: number;
+  } | null>(null);
+  const [reactions, setReactions] = useState<ReactionBurst[]>([]);
+
+  // ---- refs (not causing re-renders) ----
+  const connectionRef = useRef<RoomConnection | null>(null);
+  /** True once we receive a 'joined' message — used to detect reconnects. */
+  const hasJoinedRef = useRef(false);
+  /** The last identity + password used in room:join, so we can re-send on reconnect. */
+  const joinOptsRef = useRef<{ identity: IdentitySnapshot; password?: string } | null>(
+    null,
+  );
+  const lastErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ---- auto-clear lastError after 6s ----
+  function setLastErrorWithAutoClear(
+    err: { code: string; message: string; ts: number } | null,
+  ): void {
+    if (lastErrorTimerRef.current) {
+      clearTimeout(lastErrorTimerRef.current);
+      lastErrorTimerRef.current = null;
+    }
+    setLastError(err);
+    if (err) {
+      lastErrorTimerRef.current = setTimeout(() => {
+        setLastError(null);
+        lastErrorTimerRef.current = null;
+      }, 6_000);
+    }
+  }
+
+  // ---- prune reactions older than 4s ----
+  useEffect(() => {
+    if (reactions.length === 0) return;
+    const timer = setTimeout(() => {
+      const cutoff = Date.now() - 4_000;
+      setReactions((prev) => prev.filter((r) => r.tsLocal >= cutoff));
+    }, 4_100);
+    return () => clearTimeout(timer);
+  }, [reactions]);
+
+  // ---- send helper ----
+  const send = useCallback(
+    (msg: Parameters<RoomContextValue['send']>[0]): void => {
+      connectionRef.current?.send(msg);
+    },
+    [],
+  );
+
+  // ---- join ----
+  const join = useCallback(
+    ({ identity, password }: { identity: IdentitySnapshot; password?: string }): void => {
+      const conn = connectionRef.current;
+      if (!conn) return;
+
+      // Check for pending-create payload (written by landing page)
+      const pending = readPendingCreate(code);
+
+      // Persist so we can re-send on reconnect — a creator's password lives in
+      // the pending-create payload, not the gate form, so merge it here too.
+      joinOptsRef.current = { identity, password: pending?.password ?? password };
+
+      const msg: Parameters<typeof conn.send>[0] = {
+        type: 'room:join',
+        participant: identity,
+        ...(password ? { password } : {}),
+        ...(pending
+          ? {
+              password: pending.password ?? password,
+              create: {
+                joinCode: code,
+                ...(pending.roomName ? { roomName: pending.roomName } : {}),
+                ...(pending.password ? { password: pending.password } : {}),
+                ...(pending.seedDemo ? { seedDemo: pending.seedDemo } : {}),
+              },
+            }
+          : {}),
+      };
+
+      conn.send(msg);
+      setJoinPhase('joining');
+    },
+    [code],
+  );
+
+  // ---- resend room:join on reconnect ----
+  const resendJoin = useCallback((): void => {
+    const conn = connectionRef.current;
+    const opts = joinOptsRef.current;
+    if (!conn || !opts) return;
+
+    conn.send({
+      type: 'room:join',
+      participant: opts.identity,
+      ...(opts.password ? { password: opts.password } : {}),
+    });
+  }, []);
+
+  // ---- bootstrap: resolve code, create connection ----
+  useEffect(() => {
+    let cancelled = false;
+    let conn: RoomConnection | null = null;
+
+    async function bootstrap(): Promise<void> {
+      setJoinPhase('resolving');
+
+      let roomId: string | null = null;
+
+      // Check pending-create first — if present we already know the roomId
+      const pending = readPendingCreate(code);
+      if (pending) {
+        roomId = pending.roomId;
+      } else {
+        const result = await resolveCode(code).catch(() => null);
+        if (cancelled) return;
+        if (!result) {
+          setJoinPhase('not-found');
+          return;
+        }
+        roomId = result.roomId;
+      }
+
+      if (cancelled) return;
+
+      conn = createRoomConnection(roomId);
+      connectionRef.current = conn;
+
+      // ---- wire socket lifecycle ----
+      // createRoomConnection returns a RoomConnection extended with addEventListener;
+      // we cast to that augmented type to attach open/close lifecycle listeners.
+      type ConnWithEvents = typeof conn & {
+        addEventListener(event: string, handler: (e: Event) => void): void;
+      };
+      const connWithEvents = conn as ConnWithEvents;
+
+      const handleOpen = (): void => {
+        if (cancelled) return;
+        setConnectionStatus('connected');
+        if (hasJoinedRef.current) {
+          // Reconnected after a prior join — re-send join automatically
+          resendJoin();
+        }
+      };
+
+      const handleClose = (): void => {
+        if (cancelled) return;
+        if (hasJoinedRef.current) {
+          setConnectionStatus('reconnecting');
+        } else {
+          setConnectionStatus('disconnected');
+        }
+      };
+
+      connWithEvents.addEventListener('open', handleOpen);
+      connWithEvents.addEventListener('close', handleClose);
+
+      // ---- wire server messages ----
+
+      conn.on('joined', (msg) => {
+        if (cancelled) return;
+        hasJoinedRef.current = true;
+        setSelfId(msg.selfId);
+        setState(msg.state);
+        setConnectionStatus('connected');
+        setJoinPhase('joined');
+        setJoinError(null);
+        // Remove pending-create key now that we're in
+        deletePendingCreate(code);
+      });
+
+      conn.on('room:state', (msg) => {
+        if (cancelled) return;
+        setState(msg.state);
+      });
+
+      conn.on('error', (msg) => {
+        if (cancelled) return;
+        const { code: errCode, message } = msg;
+
+        if (errCode === 'wrong-password' || errCode === 'password-required') {
+          setJoinPhase('wrong-password');
+          setJoinError(
+            errCode === 'password-required'
+              ? 'this room has a password — go ahead and enter it'
+              : 'wrong password, give it another shot',
+          );
+        } else if (errCode === 'room-full') {
+          setJoinPhase('room-full');
+          setJoinError('the couch is full — maybe someone will get up');
+        } else if (errCode === 'room-not-found' && joinPhaseRef.current === 'joining') {
+          // The code resolved via the lobby but the room itself is still
+          // uninitialized (creator hasn't joined yet). Without this the gate
+          // spins on "finding your spot…" forever — surface the not-found
+          // screen the gate already renders.
+          setJoinPhase('not-found');
+        } else {
+          setLastErrorWithAutoClear({ code: errCode, message, ts: Date.now() });
+        }
+      });
+
+      conn.on('reaction:send', (msg) => {
+        if (cancelled) return;
+        const burst: ReactionBurst = {
+          // random-ish key — nanoid not available, use timestamp + random
+          key: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          fromId: msg.fromId,
+          emoji: msg.emoji,
+          tsLocal: Date.now(),
+        };
+        setReactions((prev) => [...prev, burst]);
+      });
+
+      setJoinPhase('gate');
+    }
+
+    void bootstrap();
+
+    return () => {
+      cancelled = true;
+      conn?.close();
+      connectionRef.current = null;
+      if (lastErrorTimerRef.current) {
+        clearTimeout(lastErrorTimerRef.current);
+        lastErrorTimerRef.current = null;
+      }
+    };
+    // `code` and `resendJoin` are stable; eslint-disable is fine
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [code]);
+
+  // ---- derived values ----
+  const self = state && selfId ? (state.participants[selfId] ?? null) : null;
+  const isHost = state !== null && selfId !== '' && state.hostId === selfId;
+  const isController =
+    state !== null &&
+    selfId !== '' &&
+    state.remote.controllerId === selfId;
+  const canControl =
+    state !== null && selfId !== ''
+      ? protocolCanControl(state, selfId)
+      : false;
+
+  const serverNow = useCallback((): number => {
+    return connectionRef.current?.serverNow() ?? Date.now();
+  }, []);
+
+  const value: RoomContextValue = {
+    state,
+    selfId,
+    self,
+    isHost,
+    isController,
+    canControl,
+    connectionStatus,
+    joinPhase,
+    joinError,
+    // Cast is safe — both have the same shape; we narrowed ErrorCode usage above
+    lastError: lastError as RoomContextValue['lastError'],
+    send,
+    join,
+    serverNow,
+    connection: connectionRef.current,
+    reactions,
+  };
+
+  return <RoomContext.Provider value={value}>{children}</RoomContext.Provider>;
+}
+
+// ---------------------------------------------------------------------------
+// Consumer hook
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the current {@link RoomContextValue}.
+ * Must be called inside a `<RoomProvider>` — throws otherwise.
+ */
+export function useRoom(): RoomContextValue {
+  const ctx = useContext(RoomContext);
+  if (!ctx) {
+    throw new Error('useRoom() must be used inside <RoomProvider>');
+  }
+  return ctx;
+}

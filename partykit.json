@@ -1,0 +1,9 @@
+{
+  "$schema": "https://www.partykit.io/schema.json",
+  "name": "couchcircle",
+  "main": "party/index.ts",
+  "compatibilityDate": "2025-03-01",
+  "parties": {
+    "lobby": "party/lobby.ts"
+  }
+}
