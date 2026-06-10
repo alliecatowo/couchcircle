@@ -1,0 +1,136 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build
+
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+      - name: Boot PartyKit dev server
+        run: |
+          npx partykit dev --port 1999 &
+          echo "PARTYKIT_PID=$!" >> "$GITHUB_ENV"
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:1999/ > /dev/null 2>&1; then
+              echo "PartyKit ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Load test
+        run: |
+          if [ -f scripts/load-test.mjs ]; then
+            node scripts/load-test.mjs 127.0.0.1:1999 8
+          else
+            echo "scripts/load-test.mjs not found — skipping load test (will be required once the script lands)"
+          fi
+
+      - name: Kill PartyKit
+        if: always()
+        run: |
+          if [ -n "$PARTYKIT_PID" ]; then
+            kill "$PARTYKIT_PID" 2>/dev/null || true
+          fi
+
+  deploy:
+    name: deploy
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Deploy PartyKit
+        env:
+          PARTYKIT_TOKEN: ${{ secrets.PARTYKIT_TOKEN }}
+          PARTYKIT_LOGIN: alliecatowo
+        run: |
+          if [ -z "$PARTYKIT_TOKEN" ]; then
+            echo "WARNING: PARTYKIT_TOKEN secret not set — skipping PartyKit deploy (fork or missing secret)"
+            exit 0
+          fi
+          npx partykit deploy --var ALLOWED_ORIGINS=https://couchcircle.vercel.app,https://virtu-sesh.vercel.app
+
+      - name: Deploy Vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: team_TNCBXF1JPB4T9kKagJMWNSOY
+          VERCEL_PROJECT_ID: prj_mbWEw6EALLVythvm7fzJ9Q9eh7wN
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo "WARNING: VERCEL_TOKEN secret not set — skipping Vercel deploy (fork or missing secret)"
+            exit 0
+          fi
+          npx vercel deploy --prod --token="$VERCEL_TOKEN" --yes
+
+      - name: Smoke test
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo "WARNING: deploy secrets not set — skipping smoke test"
+            exit 0
+          fi
+
+          echo "--- smoke: lobby create ---"
+          STATUS=$(curl -sf -o /tmp/lobby_response.json -w "%{http_code}" \
+            -X POST https://couchcircle.partykit.dev/parties/lobby/index \
+            -H "Content-Type: application/json" \
+            -d '{"action":"create"}' || echo "000")
+          if [ "$STATUS" -ge 200 ] && [ "$STATUS" -lt 300 ]; then
+            echo "PASS lobby create returned $STATUS"
+            cat /tmp/lobby_response.json | head -3
+          else
+            echo "FAIL lobby create returned $STATUS"
+            exit 1
+          fi
+
+          echo "--- smoke: Vercel homepage ---"
+          HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" https://couchcircle.vercel.app || echo "000")
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "PASS vercel homepage returned 200"
+          else
+            echo "FAIL vercel homepage returned $HTTP_CODE"
+            exit 1
+          fi

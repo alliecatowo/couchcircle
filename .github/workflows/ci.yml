@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build
+
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+      - name: Boot PartyKit dev server
+        run: |
+          npx partykit dev --port 1999 &
+          echo "PARTYKIT_PID=$!" >> "$GITHUB_ENV"
+          # Poll until ready (max 30s)
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:1999/ > /dev/null 2>&1; then
+              echo "PartyKit ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Load test
+        run: |
+          if [ -f scripts/load-test.mjs ]; then
+            node scripts/load-test.mjs 127.0.0.1:1999 8
+          else
+            echo "scripts/load-test.mjs not found — skipping load test (will be required once the script lands)"
+          fi
+
+      - name: Kill PartyKit
+        if: always()
+        run: |
+          if [ -n "$PARTYKIT_PID" ]; then
+            kill "$PARTYKIT_PID" 2>/dev/null || true
+          fi

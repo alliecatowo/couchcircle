@@ -80,6 +80,37 @@ export async function resolveCode(
   return data;
 }
 
+/**
+ * Fetch oEmbed metadata for a YouTube video ID via the lobby's ?yt= endpoint.
+ * The lobby server-side-fetches YouTube's oEmbed API with 1h cache and rate
+ * limiting. STRICT 11-char [A-Za-z0-9_-] validation enforced server-side.
+ *
+ * Returns `{ title, author, thumbnail }` or `null` when the video is unknown,
+ * the lobby is unreachable, or the id fails server-side validation.
+ */
+export async function fetchYouTubeMeta(
+  videoId: string,
+): Promise<{ title: string; author: string; thumbnail: string } | null> {
+  try {
+    const url = `${lobbyUrl()}?yt=${encodeURIComponent(videoId)}`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      title?: string;
+      author?: string;
+      thumbnail?: string;
+    };
+    if (!data.title || !data.author || !data.thumbnail) return null;
+    return {
+      title: data.title,
+      author: data.author,
+      thumbnail: data.thumbnail,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // RoomConnection implementation
 // ---------------------------------------------------------------------------

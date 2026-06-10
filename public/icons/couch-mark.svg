@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Background: couch-950 rounded square -->
+  <rect width="512" height="512" rx="96" ry="96" fill="#100b09"/>
+  <!-- Ember glow behind couch -->
+  <ellipse cx="256" cy="330" rx="160" ry="32" fill="#e08b34" opacity="0.18"/>
+  <!-- Couch body (main sofa back) -->
+  <rect x="88" y="230" width="336" height="110" rx="22" ry="22" fill="#261d19"/>
+  <!-- Couch back cushion highlight (top rail) -->
+  <rect x="100" y="230" width="312" height="34" rx="14" ry="14" fill="#3a2d27"/>
+  <!-- Left armrest -->
+  <rect x="72" y="220" width="60" height="140" rx="18" ry="18" fill="#3a2d27"/>
+  <!-- Right armrest -->
+  <rect x="380" y="220" width="60" height="140" rx="18" ry="18" fill="#3a2d27"/>
+  <!-- Seat cushion left -->
+  <rect x="100" y="286" width="140" height="54" rx="10" ry="10" fill="#2f2420"/>
+  <!-- Seat cushion right -->
+  <rect x="272" y="286" width="140" height="54" rx="10" ry="10" fill="#2f2420"/>
+  <!-- Cushion crease (center divider) -->
+  <rect x="248" y="290" width="16" height="50" rx="8" ry="8" fill="#1f1815"/>
+  <!-- Couch legs -->
+  <rect x="120" y="352" width="22" height="38" rx="8" ry="8" fill="#1f1815"/>
+  <rect x="370" y="352" width="22" height="38" rx="8" ry="8" fill="#1f1815"/>
+  <!-- Ember accent: warm glow on seat -->
+  <ellipse cx="256" cy="340" rx="100" ry="10" fill="#e08b34" opacity="0.12"/>
+  <!-- Top amber ember accent line on backrest -->
+  <rect x="120" y="238" width="272" height="5" rx="2.5" ry="2.5" fill="#f2a850" opacity="0.35"/>
+</svg>

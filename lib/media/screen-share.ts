@@ -13,6 +13,116 @@
 import type { MediaAdapterType, QueueItem } from '@/shared/protocol';
 import type { MediaAdapter, MediaAdapterEvents, ScheduledPlay, AdapterMediaStatus } from '@/lib/media/adapter';
 
+// ---------------------------------------------------------------------------
+// Share quality presets (SPRINT2 §5)
+// ---------------------------------------------------------------------------
+
+/**
+ * What the sharer is optimizing for. The trade-off the whole feature dances
+ * around: sharper than discord, lighter on your upload.
+ *
+ * - `crisp`  — text & code: high resolution, low framerate, hold the pixels.
+ * - `smooth` — video & motion: 720p but keep the framerate butter (default).
+ * - `saver`  — weak upload: small + low, sips bandwidth.
+ */
+export type SharePreset = 'crisp' | 'smooth' | 'saver';
+
+/** Per-preset capture intent: resolution/framerate ideals + the encoder hint. */
+export interface PresetSpec {
+  /** ideal capture width (px) */
+  width: number;
+  /** ideal capture height (px) */
+  height: number;
+  /** ideal capture framerate */
+  fps: number;
+  /** MediaStreamTrack.contentHint — steers the encoder's quality/motion bias */
+  contentHint: 'detail' | 'motion';
+  /** RTCRtpSendParameters.degradationPreference for the video sender */
+  degradation: RTCDegradationPreference;
+  /** base maxBitrate (bps) before viewer-count scaling */
+  baseBitrate: number;
+  /** short human label used in the segmented control */
+  label: string;
+  /** one-liner under the label */
+  blurb: string;
+}
+
+/**
+ * The three presets, exactly per SPRINT2 §5. These are the single source of
+ * truth shared by the mesh (constraints/contentHint/bitrate) and the UI (labels).
+ */
+export const SHARE_PRESETS: Record<SharePreset, PresetSpec> = {
+  crisp: {
+    width: 2560,
+    height: 1440,
+    fps: 15,
+    contentHint: 'detail',
+    degradation: 'maintain-resolution',
+    baseBitrate: 3_500_000,
+    label: 'crisp',
+    blurb: 'text & code',
+  },
+  smooth: {
+    width: 1280,
+    height: 720,
+    fps: 30,
+    contentHint: 'motion',
+    degradation: 'maintain-framerate',
+    baseBitrate: 2_200_000,
+    label: 'smooth',
+    blurb: 'video & motion',
+  },
+  saver: {
+    width: 960,
+    height: 540,
+    fps: 12,
+    contentHint: 'detail',
+    // saver leans on a hard-low bitrate; resolution is already small, so
+    // prefer keeping motion legible when the pipe narrows further.
+    degradation: 'balanced',
+    baseBitrate: 700_000,
+    label: 'saver',
+    blurb: 'weak upload',
+  },
+};
+
+/** Default preset when the host hasn't picked one. Smooth = the crowd-pleaser. */
+export const DEFAULT_SHARE_PRESET: SharePreset = 'smooth';
+
+/**
+ * getDisplayMedia constraints for a preset. Video uses `ideal` (never `exact`,
+ * which would make the picker reject screens that can't hit the number) and we
+ * always try to grab audio — the host's HostShare retries video-only if the
+ * platform refuses system audio.
+ */
+export function displayMediaConstraints(preset: SharePreset): DisplayMediaStreamOptions {
+  const spec = SHARE_PRESETS[preset];
+  return {
+    video: {
+      width: { ideal: spec.width },
+      height: { ideal: spec.height },
+      frameRate: { ideal: spec.fps },
+    },
+    audio: true,
+  };
+}
+
+/**
+ * Bitrate multiplier by live viewer count (SPRINT2 §5): the mesh fans the same
+ * encode out to every viewer, so more eyeballs = thinner slice each. ×1 for a
+ * cozy pair, easing down as the couch fills.
+ */
+export function bitrateScaleForViewers(viewers: number): number {
+  if (viewers <= 2) return 1;
+  if (viewers <= 5) return 0.6;
+  return 0.35;
+}
+
+/** Final per-sender maxBitrate (bps) for a preset at a given live viewer count. */
+export function scaledMaxBitrate(preset: SharePreset, viewers: number): number {
+  return Math.round(SHARE_PRESETS[preset].baseBitrate * bitrateScaleForViewers(viewers));
+}
+
 export class ScreenShareAdapter implements MediaAdapter {
   readonly type: MediaAdapterType = 'screen-share';
 

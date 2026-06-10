@@ -63,15 +63,15 @@ function EqualizerBars() {
 }
 
 // ---------------------------------------------------------------------------
-// Thumbnail — resolves YouTube IDs, falls back to icons for other types
+// Thumbnail — resolves stored thumbnail, falls back to YouTube derivation or icon
 // ---------------------------------------------------------------------------
 
 function QueueItemThumbnail({ item }: { item: QueueItem }) {
-  let thumbSrc: string | null = null;
+  // Prefer stored thumbnail (oEmbed-resolved for YT, or whatever was passed in);
+  // fall back to deriving the YT thumbnail from the source URL.
+  let thumbSrc: string | null = item.thumbnail ?? null;
 
-  if (item.thumbnail) {
-    thumbSrc = item.thumbnail;
-  } else if (item.type === 'youtube') {
+  if (!thumbSrc && item.type === 'youtube') {
     const parsed = parseYouTubeUrl(item.source);
     if (parsed) {
       thumbSrc = youTubeThumbnail(parsed.videoId);
@@ -87,6 +87,7 @@ function QueueItemThumbnail({ item }: { item: QueueItem }) {
           alt=""
           className="object-cover w-full h-full"
           loading="lazy"
+          decoding="async"
         />
       </div>
     );

@@ -25,12 +25,29 @@ interface CodeRecord {
   createdAt: number;
 }
 
+/**
+ * A cached YouTube oEmbed lookup. Stored under `yt:<videoId>` so it never
+ * collides with the `WORD-NNN` join-code keyspace.
+ */
+interface OEmbedRecord {
+  title: string;
+  author: string;
+  thumbnail: string;
+  fetchedAt: number;
+}
+
 /** Mappings older than this are purged lazily on access. */
 const PURGE_AFTER_MS = 24 * 60 * 60 * 1000;
 /** Per-IP budget: ~12 requests/min. */
 const LOBBY_RATE = { limit: 12, windowMs: 60_000 } as const;
 /** How many times we retry on a join-code collision before giving up. */
 const CODE_RETRIES = 40;
+/** Storage-key prefix for cached oEmbed lookups. */
+const OEMBED_PREFIX = 'yt:';
+/** Cached oEmbed results live this long (§4: 1h). */
+const OEMBED_TTL_MS = 60 * 60 * 1000;
+/** YouTube video ids are exactly 11 chars of this set — anything else is rejected. */
+const YT_ID_RE = /^[A-Za-z0-9_-]{11}$/;
 
 /** Methods/headers we accept; the allowed *origin* is decided per-request (see CORS below). */
 const CORS_STATIC_HEADERS: Record<string, string> = {
@@ -182,9 +199,16 @@ export default class LobbyServer implements Party.Server {
     return json({ roomId, joinCode }, 200, allowOrigin);
   }
 
-  /** GET ?code=MOSS-420 → { roomId } or 404. */
+  /** GET ?code=MOSS-420 → { roomId }; ?yt=<id> → oEmbed metadata; else 404. */
   private async handleResolve(req: Party.Request, allowOrigin: string | null): Promise<Response> {
     const url = new URL(req.url);
+
+    // YouTube oEmbed drill-down (§4). Strictly id-validated, cached, never a
+    // general-purpose proxy.
+    if (url.searchParams.has('yt')) {
+      return this.handleOEmbed(url.searchParams.get('yt') ?? '', allowOrigin);
+    }
+
     const raw = url.searchParams.get('code') ?? '';
     const code = normalizeJoinCode(raw);
     if (!code) {
@@ -198,6 +222,70 @@ export default class LobbyServer implements Party.Server {
       return json({ error: 'room-not-found' }, 404, allowOrigin);
     }
     return json({ roomId: record.roomId }, 200, allowOrigin);
+  }
+
+  /**
+   * GET ?yt=<11-char-id> → `{ title, author, thumbnail }` from YouTube's public
+   * oEmbed endpoint (§4). Strict id validation (this is NOT a proxy — only a
+   * valid YouTube video id is ever fetched), 1h cache in lobby storage, behind
+   * the same per-IP limiter and CORS as every other lobby response.
+   *
+   * 400 on a malformed id, 404 when YouTube doesn't recognize the video.
+   */
+  private async handleOEmbed(rawId: string, allowOrigin: string | null): Promise<Response> {
+    const id = rawId.trim();
+    if (!YT_ID_RE.test(id)) {
+      return json({ error: 'invalid-message' }, 400, allowOrigin);
+    }
+
+    const key = OEMBED_PREFIX + id;
+    const now = Date.now();
+
+    // Serve a fresh cache hit; drop a stale one so we re-fetch below.
+    const cached = await this.room.storage.get<OEmbedRecord>(key);
+    if (cached && now - cached.fetchedAt <= OEMBED_TTL_MS) {
+      return json({ title: cached.title, author: cached.author, thumbnail: cached.thumbnail }, 200, allowOrigin);
+    }
+
+    // Build the oEmbed request from the validated id only — never echo arbitrary
+    // client input into the upstream URL.
+    const watchUrl = `https://www.youtube.com/watch?v=${id}`;
+    const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(watchUrl)}&format=json`;
+
+    let upstream: Response;
+    try {
+      upstream = await fetch(oembedUrl, { headers: { Accept: 'application/json' } });
+    } catch {
+      // Network hiccup reaching YouTube — treat as not found rather than 500.
+      return json({ error: 'room-not-found' }, 404, allowOrigin);
+    }
+
+    if (!upstream.ok) {
+      // 401/404 from oEmbed = embedding disabled or unknown video.
+      return json({ error: 'room-not-found' }, 404, allowOrigin);
+    }
+
+    let data: { title?: unknown; author_name?: unknown; thumbnail_url?: unknown };
+    try {
+      data = (await upstream.json()) as typeof data;
+    } catch {
+      return json({ error: 'room-not-found' }, 404, allowOrigin);
+    }
+
+    const record: OEmbedRecord = {
+      title: typeof data.title === 'string' ? data.title.slice(0, 200) : 'YouTube video',
+      author: typeof data.author_name === 'string' ? data.author_name.slice(0, 120) : '',
+      thumbnail: typeof data.thumbnail_url === 'string' ? data.thumbnail_url.slice(0, 500) : '',
+      fetchedAt: now,
+    };
+    // Best-effort cache write; a failure just means the next lookup re-fetches.
+    try {
+      await this.room.storage.put(key, record);
+    } catch {
+      // ignore
+    }
+
+    return json({ title: record.title, author: record.author, thumbnail: record.thumbnail }, 200, allowOrigin);
   }
 
   /** Drop any stored mappings older than 24h. */

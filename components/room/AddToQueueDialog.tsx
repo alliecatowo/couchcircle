@@ -20,9 +20,25 @@ import { cn } from '@/lib/utils';
 import {
   parseYouTubeUrl,
   youTubeThumbnail,
+  classifyDirectUrl,
   isProbablyMediaUrl,
 } from '@/lib/media/url-parse';
+import { fetchYouTubeMeta } from '@/lib/realtime/connection';
 import { HOSTED_UPLOAD_ROADMAP } from '@/lib/media/hosted-upload-stub';
+
+// [sync] ExplorePanel — sibling task; contract: ExploreGrid exported from
+// '@/components/room/ExplorePanel' with prop { onPick: () => void }.
+// Cast to any so tsc doesn't fail while the sibling file is mid-flight.
+export interface ExploreGridProps {
+  onPick: () => void;
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const _exploreMod = (): Promise<any> => import('@/components/room/ExplorePanel' as any);
+const ExploreGrid = React.lazy(() =>
+  _exploreMod().then((m: { ExploreGrid: React.ComponentType<ExploreGridProps> }) => ({
+    default: m.ExploreGrid,
+  })),
+);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -45,6 +61,103 @@ function titleFromUrl(url: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Shimmer — placeholder while oEmbed resolves
+// ---------------------------------------------------------------------------
+
+function PreviewShimmer() {
+  return (
+    <div className="flex gap-3 rounded-xl border border-couch-700/60 bg-couch-850/50 p-3 animate-pulse">
+      <div className="w-24 h-14 shrink-0 rounded-lg bg-couch-750" />
+      <div className="flex-1 flex flex-col gap-2 justify-center">
+        <div className="h-3 bg-couch-750 rounded-full w-3/4" />
+        <div className="h-2.5 bg-couch-750 rounded-full w-1/2" />
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// YouTube preview card
+// ---------------------------------------------------------------------------
+
+interface YouTubeMeta {
+  title: string;
+  author: string;
+  thumbnail: string;
+}
+
+interface YouTubePreviewCardProps {
+  meta: YouTubeMeta;
+  videoId: string;
+}
+
+function YouTubePreviewCard({ meta, videoId }: YouTubePreviewCardProps) {
+  const thumb = meta.thumbnail || youTubeThumbnail(videoId);
+  return (
+    <div className="flex gap-3 rounded-xl border border-couch-650/70 bg-couch-850/60 p-3">
+      <div className="relative w-24 h-14 shrink-0 rounded-lg overflow-hidden bg-couch-750 ring-1 ring-couch-650/60">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={thumb}
+          alt=""
+          className="object-cover w-full h-full"
+          loading="lazy"
+        />
+      </div>
+      <div className="flex-1 min-w-0 flex flex-col gap-1 justify-center">
+        <p className="text-sm font-medium text-cream-100 line-clamp-2 leading-tight">
+          {meta.title}
+        </p>
+        <p className="text-xs text-cream-400 truncate">{meta.author}</p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Direct URL kind chip
+// ---------------------------------------------------------------------------
+
+type DirectKind = 'hls' | 'mp4' | 'webm' | 'file';
+
+function kindLabel(kind: DirectKind): string {
+  if (kind === 'hls') return 'HLS stream';
+  if (kind === 'mp4') return 'MP4';
+  if (kind === 'webm') return 'WebM';
+  return 'video file';
+}
+
+function classifyDirect(url: string): DirectKind | null {
+  const base = classifyDirectUrl(url);
+  if (!base) return null;
+  if (base === 'hls') return 'hls';
+  const lower = url.toLowerCase().split('?')[0];
+  if (lower.endsWith('.mp4')) return 'mp4';
+  if (lower.endsWith('.webm')) return 'webm';
+  return 'file';
+}
+
+interface DirectKindChipProps {
+  kind: DirectKind;
+}
+
+function DirectKindChip({ kind }: DirectKindChipProps) {
+  const isLive = kind === 'hls';
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
+        isLive
+          ? 'bg-coal-red/15 text-coal-red ring-1 ring-coal-red/30'
+          : 'bg-ember-500/12 text-ember-300 ring-1 ring-ember-500/25',
+      )}
+    >
+      {kindLabel(kind)}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // YouTube tab
 // ---------------------------------------------------------------------------
 
@@ -57,6 +170,41 @@ function YouTubeTab({ canAdd, onAdd }: YouTubeTabProps) {
   const { send } = useRoom();
   const [url, setUrl] = React.useState('');
   const [error, setError] = React.useState<string | null>(null);
+  const [meta, setMeta] = React.useState<YouTubeMeta | null>(null);
+  const [metaLoading, setMetaLoading] = React.useState(false);
+  const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastVideoIdRef = React.useRef<string | null>(null);
+
+  // Debounce oEmbed lookup when URL changes
+  React.useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+
+    const trimmed = url.trim();
+    const parsed = parseYouTubeUrl(trimmed);
+
+    if (!parsed) {
+      setMeta(null);
+      setMetaLoading(false);
+      lastVideoIdRef.current = null;
+      return;
+    }
+
+    const { videoId } = parsed;
+    if (videoId === lastVideoIdRef.current) return;
+
+    setMetaLoading(true);
+    setMeta(null);
+
+    debounceRef.current = setTimeout(async () => {
+      lastVideoIdRef.current = videoId;
+      const result = await fetchYouTubeMeta(videoId);
+      // Only apply if the videoId is still the one we asked for
+      if (lastVideoIdRef.current === videoId) {
+        setMeta(result);
+        setMetaLoading(false);
+      }
+    }, 400);
+  }, [url]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -67,18 +215,26 @@ function YouTubeTab({ canAdd, onAdd }: YouTubeTabProps) {
       return;
     }
     setError(null);
+    const resolvedTitle = meta?.title ?? 'YouTube video';
+    const resolvedThumb = meta?.thumbnail ?? youTubeThumbnail(parsed.videoId);
     send({
       type: 'queue:add',
       item: {
         type: 'youtube',
         source: trimmed,
-        title: 'YouTube video',
-        thumbnail: youTubeThumbnail(parsed.videoId),
+        title: resolvedTitle,
+        thumbnail: resolvedThumb,
       },
     });
     setUrl('');
+    setMeta(null);
+    setMetaLoading(false);
+    lastVideoIdRef.current = null;
     onAdd();
   }
+
+  const parsed = parseYouTubeUrl(url.trim());
+  const hasUrl = url.trim() !== '';
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-4">
@@ -103,10 +259,38 @@ function YouTubeTab({ canAdd, onAdd }: YouTubeTabProps) {
         )}
       </div>
 
+      {/* Preview area */}
+      {hasUrl && (
+        <div className="min-h-[72px]">
+          {metaLoading ? (
+            <PreviewShimmer />
+          ) : meta && parsed ? (
+            <YouTubePreviewCard meta={meta} videoId={parsed.videoId} />
+          ) : parsed && !metaLoading ? (
+            /* fallback — couldn't load oEmbed, show plain thumb */
+            <div className="flex gap-3 rounded-xl border border-couch-700/60 bg-couch-850/50 p-3">
+              <div className="relative w-24 h-14 shrink-0 rounded-lg overflow-hidden bg-couch-750 ring-1 ring-couch-650/60">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={youTubeThumbnail(parsed.videoId)}
+                  alt=""
+                  className="object-cover w-full h-full"
+                  loading="lazy"
+                />
+              </div>
+              <div className="flex-1 flex flex-col gap-1 justify-center">
+                <p className="text-sm font-medium text-cream-300">YouTube video</p>
+                <p className="text-xs text-cream-400/60">couldn't load details</p>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      )}
+
       <DialogFooter>
         {canAdd ? (
           <Button type="submit" variant="accent" size="md" disabled={url.trim() === ''}>
-            add to queue
+            add to up next
           </Button>
         ) : (
           <Tooltip>
@@ -119,7 +303,7 @@ function YouTubeTab({ canAdd, onAdd }: YouTubeTabProps) {
                   disabled
                   className="pointer-events-none"
                 >
-                  add to queue
+                  add to up next
                 </Button>
               </span>
             </TooltipTrigger>
@@ -143,7 +327,18 @@ interface DirectLinkTabProps {
 function DirectLinkTab({ canAdd, onAdd }: DirectLinkTabProps) {
   const { send } = useRoom();
   const [url, setUrl] = React.useState('');
+  const [title, setTitle] = React.useState('');
   const [error, setError] = React.useState<string | null>(null);
+  // [sync] derive kind on the fly for the chip
+  const kind = React.useMemo(() => classifyDirect(url.trim()), [url]);
+
+  // Auto-fill title from filename when URL changes, unless user has overridden it
+  const userEditedTitle = React.useRef(false);
+  React.useEffect(() => {
+    if (!userEditedTitle.current) {
+      setTitle(url.trim() ? titleFromUrl(url.trim()) : '');
+    }
+  }, [url]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -158,10 +353,12 @@ function DirectLinkTab({ canAdd, onAdd }: DirectLinkTabProps) {
       item: {
         type: 'direct-url',
         source: trimmed,
-        title: titleFromUrl(trimmed),
+        title: title.trim() || titleFromUrl(trimmed),
       },
     });
     setUrl('');
+    setTitle('');
+    userEditedTitle.current = false;
     onAdd();
   }
 
@@ -175,6 +372,7 @@ function DirectLinkTab({ canAdd, onAdd }: DirectLinkTabProps) {
           value={url}
           onChange={(e) => {
             setUrl(e.target.value);
+            userEditedTitle.current = false;
             if (error) setError(null);
           }}
           className={cn(error && 'border-coal-red/60 focus-visible:border-coal-red/80')}
@@ -192,10 +390,39 @@ function DirectLinkTab({ canAdd, onAdd }: DirectLinkTabProps) {
         )}
       </div>
 
+      {/* Kind chip + title input — shown once we have a valid URL */}
+      {kind !== null && (
+        <div className="flex flex-col gap-3 rounded-xl border border-couch-700/50 bg-couch-850/50 p-3">
+          <div className="flex items-center gap-2">
+            <DirectKindChip kind={kind} />
+            {kind === 'hls' && (
+              <span className="text-xs text-cream-400">live stream detected</span>
+            )}
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="direct-title" className="text-xs text-cream-400">
+              title
+            </Label>
+            <Input
+              id="direct-title"
+              value={title}
+              onChange={(e) => {
+                setTitle(e.target.value);
+                userEditedTitle.current = true;
+              }}
+              placeholder="give it a name"
+              className="h-8 text-sm"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+        </div>
+      )}
+
       <DialogFooter>
         {canAdd ? (
           <Button type="submit" variant="accent" size="md" disabled={url.trim() === ''}>
-            add to queue
+            add to up next
           </Button>
         ) : (
           <Tooltip>
@@ -208,7 +435,7 @@ function DirectLinkTab({ canAdd, onAdd }: DirectLinkTabProps) {
                   disabled
                   className="pointer-events-none"
                 >
-                  add to queue
+                  add to up next
                 </Button>
               </span>
             </TooltipTrigger>
@@ -299,6 +526,30 @@ function ScreenShareTab({ canAdd, onAdd }: ScreenShareTabProps) {
 }
 
 // ---------------------------------------------------------------------------
+// Explore tab — embeds ExploreGrid from sibling ExplorePanel task
+// ---------------------------------------------------------------------------
+
+interface ExploreTabProps {
+  onPick: () => void;
+}
+
+function ExploreTab({ onPick }: ExploreTabProps) {
+  return (
+    <div className="min-h-[200px]">
+      <React.Suspense
+        fallback={
+          <div className="flex items-center justify-center py-12 text-cream-400 text-sm">
+            loading channels…
+          </div>
+        }
+      >
+        <ExploreGrid onPick={onPick} />
+      </React.Suspense>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Hosted Upload stub card (non-interactive / dimmed)
 // ---------------------------------------------------------------------------
 
@@ -383,7 +634,7 @@ export function AddToQueueDialog({ open, onOpenChange }: AddToQueueDialogProps) 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>add to queue</DialogTitle>
           <DialogDescription>
@@ -402,6 +653,9 @@ export function AddToQueueDialog({ open, onOpenChange }: AddToQueueDialogProps) 
             <TabsTrigger value="screen" className="flex-1">
               screen share
             </TabsTrigger>
+            <TabsTrigger value="explore" className="flex-1">
+              channel surf 📺
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="youtube">
@@ -414,6 +668,10 @@ export function AddToQueueDialog({ open, onOpenChange }: AddToQueueDialogProps) 
 
           <TabsContent value="screen">
             <ScreenShareTab canAdd={canAdd} onAdd={handleAdd} />
+          </TabsContent>
+
+          <TabsContent value="explore">
+            <ExploreTab onPick={handleAdd} />
           </TabsContent>
         </Tabs>
 

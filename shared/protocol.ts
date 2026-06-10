@@ -151,6 +151,13 @@ export interface RoomState {
   chat: ChatMessage[];
   /** capped at MAX_EVENTS, oldest dropped */
   events: RoomEvent[];
+  /**
+   * Number of companion "projector" windows currently attached (the big-screen
+   * second-screen view). Projectors are NOT participants — they take no seat and
+   * don't count toward MAX_PARTICIPANTS — but the crew likes to know the movie is
+   * up on a wall somewhere. Server-maintained, broadcast in every snapshot.
+   */
+  projectorCount: number;
 }
 
 /** A lightweight "do a thing" room action with personality. */
@@ -177,7 +184,7 @@ export interface NewQueueItem { type: QueueItemType; source: string; title?: str
  * room. The server validates permissions per §7 before applying any of these.
  */
 export type ClientMessage =
-  | { type: 'room:join'; participant: IdentitySnapshot; password?: string; create?: CreateOptions }
+  | { type: 'room:join'; participant: IdentitySnapshot; password?: string; create?: CreateOptions; role?: 'crew' | 'projector' }
   | { type: 'room:leave' }
   | { type: 'ping'; t0: number }
   | { type: 'presence:update'; status?: ParticipantStatus; isReady?: boolean; name?: string; avatar?: AvatarId; accent?: string }

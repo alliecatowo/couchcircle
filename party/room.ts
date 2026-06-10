@@ -79,6 +79,14 @@ export class RoomEngine {
   private password: string | undefined;
   /** connectionId → participantId for this room's live sockets. */
   private readonly conns = new Map<string, string>();
+  /**
+   * connectionId → projector id for attached companion big-screen windows.
+   * Projectors are NOT participants (no seat, not counted toward
+   * MAX_PARTICIPANTS) but their conn→id mapping lives here so webrtc relays
+   * (`screen:viewer-ready`, offers/ice) can reach them — a projector becomes a
+   * screen-share viewer just like a crew member.
+   */
+  private readonly projectors = new Map<string, string>();
   /** Per-connection sliding-window limiter. */
   private readonly limiter = new RateLimiter();
 
@@ -107,6 +115,9 @@ export class RoomEngine {
         for (const p of Object.values(this.state.participants)) {
           p.connected = false;
         }
+        // Old snapshots predate projectorCount; default it. No projector window
+        // survives a restart, so any restored count is also stale → 0.
+        this.state.projectorCount = 0;
       }
     } catch {
       // Corrupt snapshot — start fresh.
@@ -139,6 +150,15 @@ export class RoomEngine {
       return;
     }
 
+    // Projector connections aren't participants, but their relay traffic
+    // (webrtc:* + screen:viewer-ready) must still flow so they can watch a
+    // screen share. They may only relay or leave — never mutate room state.
+    const projectorId = this.projectors.get(sender.id);
+    if (projectorId) {
+      this.handleProjectorMessage(msg, sender, projectorId);
+      return;
+    }
+
     // Everything else requires an established participant on this connection.
     const pid = this.conns.get(sender.id);
     if (!this.state || !pid || !this.state.participants[pid]) {
@@ -151,6 +171,20 @@ export class RoomEngine {
   /** A websocket closed. Mark disconnected + schedule removal. */
   onClose(conn: Party.Connection): void {
     this.limiter.forgetPrefix(`${conn.id}:`);
+
+    // A projector window closing just decrements the count and re-broadcasts;
+    // there's no participant, grace window, or remote handoff to worry about.
+    if (this.projectors.has(conn.id)) {
+      this.projectors.delete(conn.id);
+      if (this.state) {
+        this.state.projectorCount = this.projectors.size;
+        this.touch();
+        this.broadcastState();
+        this.schedulePersist();
+      }
+      return;
+    }
+
     const pid = this.conns.get(conn.id);
     this.conns.delete(conn.id);
     if (!this.state || !pid) return;
@@ -190,6 +224,13 @@ export class RoomEngine {
     msg: Extract<ClientMessage, { type: 'room:join' }>,
     sender: Party.Connection,
   ): void {
+    // Projectors are second-screen viewers, not crew — handled entirely apart
+    // from the participant/seat/capacity/password machinery below.
+    if (msg.role === 'projector') {
+      this.handleProjectorJoin(msg, sender);
+      return;
+    }
+
     const identity = sanitizeIdentity(msg.participant);
     const now = Date.now();
 
@@ -275,6 +316,72 @@ export class RoomEngine {
   }
 
   /**
+   * A companion "projector" window attaching (§1). It takes no seat, isn't
+   * password-gated, doesn't count toward MAX_PARTICIPANTS, and creates no
+   * participant entry — but it gets a `joined` reply + every broadcast, and its
+   * conn→id mapping is registered so screen-share webrtc relays reach it.
+   */
+  private handleProjectorJoin(
+    msg: Extract<ClientMessage, { type: 'room:join' }>,
+    sender: Party.Connection,
+  ): void {
+    // Can't throw a movie onto a wall that doesn't exist yet.
+    if (!this.state) {
+      this.sendError(sender, 'room-not-found', 'this room dissolved into the haze');
+      return void closeSoon(sender);
+    }
+    const projectorId = String(msg.participant?.id ?? '').slice(0, 64) || `prj_${crypto.randomUUID()}`;
+    this.projectors.set(sender.id, projectorId);
+    this.state.projectorCount = this.projectors.size;
+
+    this.touch();
+    // The projector needs full state to render; the crew wants the bumped count.
+    this.reply(sender, { type: 'joined', selfId: projectorId, state: this.state, serverNow: Date.now() });
+    this.broadcastState(sender.id);
+    this.schedulePersist();
+  }
+
+  /**
+   * Messages from a projector connection. Projectors are pure viewers: the only
+   * traffic they may send is webrtc relay + `screen:viewer-ready` (so they can
+   * pull a screen share), plus `ping`/`room:leave`. Anything that would mutate
+   * room state is silently ignored — a projector can never drive the couch.
+   */
+  private handleProjectorMessage(
+    msg: ClientMessage,
+    sender: Party.Connection,
+    projectorId: string,
+  ): void {
+    switch (msg.type) {
+      case 'webrtc:offer':
+        this.relay(msg.toId, { type: 'webrtc:offer', fromId: projectorId, sdp: msg.sdp });
+        return;
+      case 'webrtc:answer':
+        this.relay(msg.toId, { type: 'webrtc:answer', fromId: projectorId, sdp: msg.sdp });
+        return;
+      case 'webrtc:ice':
+        this.relay(msg.toId, { type: 'webrtc:ice', fromId: projectorId, candidate: msg.candidate });
+        return;
+      case 'screen:viewer-ready':
+        this.relay(msg.toId, { type: 'screen:viewer-ready', fromId: projectorId });
+        return;
+      case 'room:leave':
+        this.projectors.delete(sender.id);
+        if (this.state) {
+          this.state.projectorCount = this.projectors.size;
+          this.touch();
+          this.broadcastState();
+          this.schedulePersist();
+        }
+        closeSoon(sender);
+        return;
+      default:
+        // Projectors don't drive anything else; ignore silently.
+        return;
+    }
+  }
+
+  /**
    * If `pid` is the host and the remote is currently orphaned — `controllerId`
    * is undefined or points at a participant who no longer exists — hand the
    * remote back to the host. No-op otherwise (a live controller keeps it; the
@@ -327,6 +434,7 @@ export class RoomEngine {
       sesh: { enabled: false, rotationActive: false, rotationIds: [], currentRotationIndex: 0 },
       chat: [],
       events: [],
+      projectorCount: this.projectors.size,
     };
 
     if (create.seedDemo) this.seedDemoQueue(identity, now);
@@ -577,6 +685,11 @@ export class RoomEngine {
   private handleLeave(sender: Party.Connection, pid: string): void {
     this.conns.delete(sender.id);
     if (!this.hasOtherConnection(pid, sender.id)) {
+      // An explicit leave IS a disconnect — flip `connected` first so
+      // removeParticipant's "they reconnected in the meantime" guard
+      // (`if (p.connected) return`) doesn't skip the removal.
+      const p = this.state?.participants[pid];
+      if (p) p.connected = false;
       this.removeParticipant(pid);
     }
     closeSoon(sender);
@@ -1293,9 +1406,65 @@ export class RoomEngine {
       this.endScreenShare(p.name);
     }
 
+    // §7 hygiene: the last seat just emptied (post-grace). Dissolve the couch —
+    // wipe state to uninitialized, cancel EVERY timer, and clear storage so a
+    // cold reload can't resurrect a ghost room. A lingering projector window, if
+    // any, is left to discover the empty room on its own and close out.
+    if (Object.keys(this.state.participants).length === 0) {
+      this.resetRoom();
+      return;
+    }
+
     this.touch();
     this.broadcastState();
     this.schedulePersist();
+  }
+
+  /**
+   * Full room teardown (§7): cancel all server timers, drop the in-memory state
+   * + private password back to uninitialized, and wipe storage so nothing
+   * survives. The next `room:join` with a `create` payload starts fresh.
+   *
+   * Projectors are dropped from the count but their sockets aren't force-closed
+   * here — a projector watching an empty couch will get the now-uninitialized
+   * picture on its next interaction and tear itself down.
+   */
+  private resetRoom(): void {
+    this.cancelAllTimers();
+    this.state = null;
+    this.password = undefined;
+    this.persistDirty = false;
+    void this.room.storage.deleteAll().catch(() => {
+      // Best-effort wipe; a failed deleteAll only risks a stale snapshot that
+      // SNAPSHOT_MAX_AGE_MS will eventually age out anyway.
+    });
+  }
+
+  /**
+   * Cancel and forget EVERY server-side timer handle: per-participant disconnect
+   * grace timers, rotation auto-advance, spark countdown, snack-vote tally, and
+   * the throttled persist timer. Audited against every `setTimeout`/`setInterval`
+   * in this file — if a new timer is added, clear it here too.
+   */
+  private cancelAllTimers(): void {
+    for (const t of this.disconnectTimers.values()) clearTimeout(t);
+    this.disconnectTimers.clear();
+    if (this.rotationTimer) {
+      clearTimeout(this.rotationTimer);
+      this.rotationTimer = null;
+    }
+    if (this.countdownTimer) {
+      clearTimeout(this.countdownTimer);
+      this.countdownTimer = null;
+    }
+    if (this.snackTimer) {
+      clearTimeout(this.snackTimer);
+      this.snackTimer = null;
+    }
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
   }
 
   /** Hand the remote to the host (if connected) else the earliest-joined connected participant. */
@@ -1365,10 +1534,18 @@ export class RoomEngine {
   }
 
   private relay(toId: string, msg: ServerMessage): void {
+    const payload = serializeMessage(msg);
     for (const [connId, pid] of this.conns) {
       if (pid !== toId) continue;
       const conn = this.room.getConnection(connId);
-      if (conn) conn.send(serializeMessage(msg));
+      if (conn) conn.send(payload);
+    }
+    // Projectors are valid relay targets — a screen share reaches them the same
+    // way it reaches any crew viewer.
+    for (const [connId, prjId] of this.projectors) {
+      if (prjId !== toId) continue;
+      const conn = this.room.getConnection(connId);
+      if (conn) conn.send(payload);
     }
   }
 

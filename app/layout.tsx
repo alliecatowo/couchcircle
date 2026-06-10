@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { Fraunces, Nunito } from 'next/font/google';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import ServiceWorkerRegistrar from '@/components/pwa/ServiceWorkerRegistrar';
 import './globals.css';
 
 /**
@@ -30,6 +31,22 @@ export const metadata: Metadata = {
   title: 'CouchCircle — watch together, actually together',
   description:
     'Watch YouTube, direct media links, or screen share with friends — synced, cozy, and actually fun.',
+  // [sync] pwa §6 — PWA metadata additions
+  themeColor: '#e08b34', // ember-500
+  appleWebApp: {
+    capable: true,
+    title: 'CouchCircle',
+    statusBarStyle: 'black-translucent',
+  },
+  icons: {
+    apple: [
+      { url: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },
+    ],
+    icon: [
+      { url: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },
+      { url: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' },
+    ],
+  },
 };
 
 export default function RootLayout({
@@ -47,6 +64,8 @@ export default function RootLayout({
         <TooltipProvider delayDuration={250} skipDelayDuration={400}>
           {children}
         </TooltipProvider>
+        {/* [sync] pwa §6 — registers sw.js in production */}
+        <ServiceWorkerRegistrar />
       </body>
     </html>
   );

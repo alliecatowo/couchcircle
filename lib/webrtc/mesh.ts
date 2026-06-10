@@ -8,6 +8,13 @@
  */
 
 import type { RoomConnection } from '@/lib/realtime/types';
+import {
+  type SharePreset,
+  SHARE_PRESETS,
+  DEFAULT_SHARE_PRESET,
+  displayMediaConstraints,
+  scaledMaxBitrate,
+} from '@/lib/media/screen-share';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -24,6 +31,26 @@ interface MeshOpts {
   onPeerStates(states: Record<string, PeerConnState>): void;
   /** host side: called when the sharer's own track ends (user hit browser Stop) */
   onLocalEnded(): void;
+}
+
+/** Live encode telemetry surfaced to the host's stats chip. */
+export interface ShareStats {
+  width: number;
+  height: number;
+  fps: number;
+  kbpsUp: number;
+  viewers: number;
+}
+
+/** Live decode telemetry surfaced to the viewer's stats chip. */
+export interface ViewerStats {
+  kbpsDown: number;
+}
+
+/** Cached getStats sample for kbps deltas (bytes counters are monotonic). */
+interface ByteSample {
+  bytes: number;
+  ts: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -46,12 +73,18 @@ export class ScreenShareMesh {
   private hostPeers = new Map<string, RTCPeerConnection>(); // viewerId → pc
   /** Viewers who announced readiness before we had a stream to offer. */
   private pendingViewers = new Set<string>();
+  /** Quality preset chosen for the active share; drives constraints + bitrate. */
+  private preset: SharePreset = DEFAULT_SHARE_PRESET;
+  /** Cached outbound-rtp byte sample for kbpsUp deltas (host side). */
+  private hostByteSample: ByteSample | null = null;
 
   // viewer-side state
   private viewerPc: RTCPeerConnection | null = null;
   private viewerSharerId: string | null = null;
   /** ICE candidates buffered before remoteDescription is set */
   private bufferedCandidates: RTCIceCandidateInit[] = [];
+  /** Cached inbound-rtp byte sample for kbpsDown deltas (viewer side). */
+  private viewerByteSample: ByteSample | null = null;
 
   // peer states record published via onPeerStates
   private peerStates: Record<string, PeerConnState> = {};
@@ -69,23 +102,39 @@ export class ScreenShareMesh {
   // -------------------------------------------------------------------------
 
   /**
-   * Acquire screen media (video + audio when available), then wait for viewers
+   * Acquire screen media for the chosen quality preset, then wait for viewers
    * to announce themselves via screen:viewer-ready before creating offers.
+   *
+   * The preset drives three things: the getDisplayMedia constraints (resolution
+   * + framerate ideals), the video track's `contentHint` (the encoder's
+   * quality-vs-motion bias), and the per-sender maxBitrate (scaled live by how
+   * many people are watching). Sharper than discord, lighter on your upload.
    */
-  async startSharing(): Promise<MediaStream> {
+  async startSharing(opts: { preset: SharePreset } = { preset: DEFAULT_SHARE_PRESET }): Promise<MediaStream> {
+    this.preset = opts.preset;
+    const spec = SHARE_PRESETS[this.preset];
+
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      stream = await navigator.mediaDevices.getDisplayMedia(displayMediaConstraints(this.preset));
     } catch (err) {
       // Audio capture failed on some platforms/browsers — retry video-only.
       if (err instanceof DOMException && err.name !== 'NotAllowedError') {
-        stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+        const videoOnly = { ...displayMediaConstraints(this.preset), audio: false };
+        stream = await navigator.mediaDevices.getDisplayMedia(videoOnly);
       } else {
         throw err;
       }
     }
 
     this.localStream = stream;
+    this.hostByteSample = null;
+
+    // Steer the encoder: 'detail' holds pixels for text/code, 'motion' keeps the
+    // framerate for video. Applied to the video track before any sender reads it.
+    for (const track of stream.getVideoTracks()) {
+      track.contentHint = spec.contentHint;
+    }
 
     // Any viewers who announced readiness while we were still picking a screen
     // never got an offer — offer to them now that we have a stream.
@@ -93,6 +142,10 @@ export class ScreenShareMesh {
       this._createOfferForViewer(viewerId);
     }
     this.pendingViewers.clear();
+
+    // Bitrate is viewer-count-sensitive; the pending flush above changed the
+    // count, so settle every sender to the current target.
+    this._applySenderParamsToAll();
 
     // When the user presses the browser's native "Stop sharing" button each
     // track fires an ended event — forward the first one to the caller so they
@@ -110,6 +163,7 @@ export class ScreenShareMesh {
   stopSharing(): void {
     this.localStream?.getTracks().forEach(t => t.stop());
     this.localStream = null;
+    this.hostByteSample = null;
 
     this.hostPeers.forEach(pc => pc.close());
     this.hostPeers.clear();
@@ -233,6 +287,15 @@ export class ScreenShareMesh {
       pc.addTrack(track, stream);
     }
 
+    // Prefer VP9 on the video transceiver (better quality/bitrate, esp. for the
+    // crisp text/code preset). Guard: getCapabilities can be null in some envs.
+    this._preferVp9(pc);
+
+    // Cap the encode for this viewer (degradationPreference + scaled maxBitrate).
+    // Re-applied across ALL viewers below so the new arrival changes everyone's
+    // slice of the host's upload, per the viewer-count scaling rule.
+    this._applySenderParamsToAll();
+
     // Trickle ICE to viewer
     pc.addEventListener('icecandidate', ({ candidate }) => {
       if (candidate) {
@@ -249,6 +312,15 @@ export class ScreenShareMesh {
       const state = this._mapConnState(pc.connectionState);
       this.peerStates = { ...this.peerStates, [viewerId]: state };
       this.opts.onPeerStates({ ...this.peerStates });
+
+      // A viewer dropping for good shrinks the live count — close + forget the
+      // PC and re-scale everyone else back up to their fatter slice.
+      if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+        if (this.hostPeers.get(viewerId) === pc) {
+          this.hostPeers.delete(viewerId);
+          this._applySenderParamsToAll();
+        }
+      }
     });
 
     // Create offer and send
@@ -327,8 +399,196 @@ export class ScreenShareMesh {
     this.viewerPc?.close();
     this.viewerPc = null;
     this.bufferedCandidates = [];
+    this.viewerByteSample = null;
     this.peerStates = {};
     this.opts.onPeerStates({});
+  }
+
+  // -------------------------------------------------------------------------
+  // Private — encode tuning (preset → codec / degradation / bitrate)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Prefer VP9 first on the connection's video transceiver. Guarded: in some
+   * environments `RTCRtpSender.getCapabilities` is null (or the method is
+   * absent), in which case we leave the browser's default codec ordering alone.
+   */
+  private _preferVp9(pc: RTCPeerConnection): void {
+    const getCaps = RTCRtpSender.getCapabilities;
+    if (typeof getCaps !== 'function') return;
+    const caps = getCaps('video');
+    if (!caps) return;
+
+    const codecs = caps.codecs ?? [];
+    const vp9 = codecs.filter(c => /vp9/i.test(c.mimeType));
+    if (vp9.length === 0) return;
+    const rest = codecs.filter(c => !/vp9/i.test(c.mimeType));
+    const ordered = [...vp9, ...rest];
+
+    for (const transceiver of pc.getTransceivers()) {
+      if (transceiver.sender.track?.kind !== 'video') continue;
+      // setCodecPreferences may throw if the list is somehow invalid — never let
+      // a codec-ordering nicety abort the whole offer.
+      try {
+        transceiver.setCodecPreferences(ordered);
+      } catch {
+        /* keep default ordering */
+      }
+    }
+  }
+
+  /** Re-apply degradationPreference + scaled maxBitrate to every host sender. */
+  private _applySenderParamsToAll(): void {
+    const viewers = this.hostPeers.size;
+    for (const pc of this.hostPeers.values()) {
+      void this._applySenderParams(pc, viewers);
+    }
+  }
+
+  /**
+   * Cap one peer connection's video sender for the current preset + viewer
+   * count. Per the WebRTC spec we read the live parameters, MUTATE the
+   * `encodings` object we got back (never fabricate a fresh one), and write it.
+   */
+  private async _applySenderParams(pc: RTCPeerConnection, viewers: number): Promise<void> {
+    const spec = SHARE_PRESETS[this.preset];
+    const maxBitrate = scaledMaxBitrate(this.preset, viewers);
+
+    for (const sender of pc.getSenders()) {
+      if (sender.track?.kind !== 'video') continue;
+
+      const params = sender.getParameters();
+      // Some browsers hand back an empty encodings array before the first
+      // negotiation settles — seed one entry so the cap actually lands.
+      if (!params.encodings || params.encodings.length === 0) {
+        params.encodings = [{}];
+      }
+      for (const enc of params.encodings) {
+        enc.maxBitrate = maxBitrate;
+      }
+      params.degradationPreference = spec.degradation;
+
+      try {
+        await sender.setParameters(params);
+      } catch {
+        // Stale parameters (transceiver renegotiating) — the next join/leave or
+        // the periodic re-apply will settle it.
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Stats sampling (getShareStats / getViewerStats)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Host telemetry: frame size + framerate from the outbound-rtp report plus an
+   * up-kbps figure derived from the bytesSent delta since the last sample
+   * (counters are monotonic; we cache the previous read). Returns null until a
+   * stream and at least one outbound video report exist.
+   */
+  async getShareStats(): Promise<ShareStats | null> {
+    const stream = this.localStream;
+    if (!stream) return null;
+
+    // Any one host PC carries the same encode; sample the first connected one.
+    const pc =
+      [...this.hostPeers.values()].find(p => p.connectionState === 'connected') ??
+      [...this.hostPeers.values()][0];
+
+    let width = 0;
+    let height = 0;
+    let fps = 0;
+    let bytesSent = 0;
+    let haveOutbound = false;
+
+    if (pc) {
+      const report = await pc.getStats();
+      report.forEach(stat => {
+        if (stat.type === 'outbound-rtp' && (stat as RTCOutboundRtpStreamStats).kind === 'video') {
+          const s = stat as RTCOutboundRtpStreamStats & {
+            frameWidth?: number;
+            frameHeight?: number;
+            framesPerSecond?: number;
+          };
+          haveOutbound = true;
+          width = s.frameWidth ?? width;
+          height = s.frameHeight ?? height;
+          fps = Math.round(s.framesPerSecond ?? fps);
+          bytesSent += s.bytesSent ?? 0;
+        }
+      });
+    }
+
+    // Fall back to the capture track's settings if no report has dimensions yet
+    // (e.g. before the first viewer connects — still want to show resolution).
+    if (width === 0 || height === 0) {
+      const settings = stream.getVideoTracks()[0]?.getSettings();
+      width = width || settings?.width || SHARE_PRESETS[this.preset].width;
+      height = height || settings?.height || SHARE_PRESETS[this.preset].height;
+      fps = fps || Math.round(settings?.frameRate ?? SHARE_PRESETS[this.preset].fps);
+    }
+
+    const kbpsUp = haveOutbound
+      ? this._kbpsFromDelta(bytesSent, () => this.hostByteSample, s => (this.hostByteSample = s))
+      : 0;
+
+    return {
+      width,
+      height,
+      fps,
+      kbpsUp,
+      viewers: this.hostPeers.size,
+    };
+  }
+
+  /**
+   * Viewer telemetry: down-kbps from the inbound-rtp bytesReceived delta since
+   * the last sample. Returns null until the viewer PC has a video report.
+   */
+  async getViewerStats(): Promise<ViewerStats | null> {
+    const pc = this.viewerPc;
+    if (!pc) return null;
+
+    let bytesReceived = 0;
+    let haveInbound = false;
+
+    const report = await pc.getStats();
+    report.forEach(stat => {
+      if (stat.type === 'inbound-rtp' && (stat as RTCInboundRtpStreamStats).kind === 'video') {
+        haveInbound = true;
+        bytesReceived += (stat as RTCInboundRtpStreamStats).bytesReceived ?? 0;
+      }
+    });
+
+    if (!haveInbound) return null;
+
+    const kbpsDown = this._kbpsFromDelta(
+      bytesReceived,
+      () => this.viewerByteSample,
+      s => (this.viewerByteSample = s),
+    );
+    return { kbpsDown };
+  }
+
+  /**
+   * Turn a monotonic byte counter into kbps using the cached previous sample.
+   * First call (no prior sample) seeds the cache and reports 0 — the chip fills
+   * in on the next poll once a real ~2s window has elapsed.
+   */
+  private _kbpsFromDelta(
+    bytes: number,
+    getPrev: () => ByteSample | null,
+    setPrev: (s: ByteSample) => void,
+  ): number {
+    const now = Date.now();
+    const prev = getPrev();
+    setPrev({ bytes, ts: now });
+    if (!prev) return 0;
+    const dtSec = (now - prev.ts) / 1000;
+    if (dtSec <= 0) return 0;
+    const deltaBytes = Math.max(0, bytes - prev.bytes); // guard counter resets
+    return Math.round((deltaBytes * 8) / dtSec / 1000);
   }
 
   // -------------------------------------------------------------------------

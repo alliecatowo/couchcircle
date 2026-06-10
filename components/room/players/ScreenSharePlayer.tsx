@@ -1,24 +1,37 @@
 'use client';
 
 /**
- * ScreenSharePlayer — the P2P mesh screen share, host + viewer sides (§12, §10.4).
+ * ScreenSharePlayer — the P2P mesh screen share, host + viewer sides (§12, §10.4,
+ * SPRINT2 §5).
  *
  * The sharer is `state.media.sharerId`. If that's us we're the HOST: we own one
- * {@link ScreenShareMesh}, capture our screen via `getDisplayMedia`, preview it
- * locally (muted), and tell the room `screen:start`. We surface a per-viewer
- * connection-state row from `onPeerStates`. Everyone else is a VIEWER: we ask to
- * view, attach the remote stream when it arrives, and show our own connection
- * state chip with honest copy about mesh limits.
+ * {@link ScreenShareMesh}, pick a quality preset, capture our screen via
+ * `getDisplayMedia`, preview it locally (muted), and tell the room `screen:start`.
+ * We surface a per-viewer connection-state row from `onPeerStates` plus a live
+ * stats chip (resolution · fps · up-kbps · watcher count). Everyone else is a
+ * VIEWER: we ask to view, attach the remote stream when it arrives, and show our
+ * own connection state chip + an inbound-kbps chip with honest copy about mesh
+ * limits.
  *
  * Honest about the MVP: STUN-only, no TURN relay — when a peer can't punch
  * through we say so plainly rather than spinning forever.
  */
 
 import * as React from 'react';
-import { MonitorUp, MonitorOff, Loader2, Wifi, WifiOff, AlertTriangle } from 'lucide-react';
+import { MonitorUp, MonitorOff, Loader2, Wifi, WifiOff, AlertTriangle, Gauge } from 'lucide-react';
 import { useRoom } from '@/lib/realtime/room-context';
-import { ScreenShareAdapter } from '@/lib/media/screen-share';
-import { ScreenShareMesh, type PeerConnState } from '@/lib/webrtc/mesh';
+import {
+  ScreenShareAdapter,
+  SHARE_PRESETS,
+  DEFAULT_SHARE_PRESET,
+  type SharePreset,
+} from '@/lib/media/screen-share';
+import {
+  ScreenShareMesh,
+  type PeerConnState,
+  type ShareStats,
+  type ViewerStats,
+} from '@/lib/webrtc/mesh';
 import type { SyncEngine } from '@/lib/sync/sync-engine';
 import type { QueueItem } from '@/shared/protocol';
 import { MESH_COMFORT_LIMIT } from '@/shared/constants';
@@ -69,6 +82,77 @@ function PeerStateChip({ state, label }: { state: PeerConnState; label?: string 
 }
 
 // ---------------------------------------------------------------------------
+// Stats chip — small telemetry readout (host: full; viewer: down-kbps)
+// ---------------------------------------------------------------------------
+
+/** "1.4 Mbps" / "640 kbps" from a kbps figure. */
+function fmtBitrate(kbps: number): string {
+  if (kbps <= 0) return '— kbps';
+  if (kbps >= 1000) return `${(kbps / 1000).toFixed(1)} Mbps`;
+  return `${kbps} kbps`;
+}
+
+function StatsChip({ children }: { children: React.ReactNode }) {
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-full border border-couch-700 bg-couch-800/70 px-2.5 py-0.5',
+        'font-body text-xs font-semibold leading-none text-cream-200 [&_svg]:size-3 [&_svg]:shrink-0 [&_svg]:text-ember-300',
+      )}
+    >
+      <Gauge />
+      {children}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Preset segmented control (host, before start)
+// ---------------------------------------------------------------------------
+
+const PRESET_ORDER: SharePreset[] = ['crisp', 'smooth', 'saver'];
+
+function PresetPicker({
+  value,
+  onChange,
+}: {
+  value: SharePreset;
+  onChange: (p: SharePreset) => void;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label="share quality"
+      className="flex w-full max-w-md gap-1 rounded-2xl border border-couch-700 bg-couch-850/80 p-1"
+    >
+      {PRESET_ORDER.map((p) => {
+        const spec = SHARE_PRESETS[p];
+        const active = p === value;
+        return (
+          <button
+            key={p}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            onClick={() => onChange(p)}
+            className={cn(
+              'flex flex-1 flex-col items-center gap-0.5 rounded-xl px-3 py-2 text-center',
+              'transition-colors duration-200 ease-[var(--ease-cozy)]',
+              active
+                ? 'bg-ember-500/15 text-cream-50 ring-1 ring-ember-500/60 glow-ember'
+                : 'text-cream-400 hover:bg-couch-750 hover:text-cream-200',
+            )}
+          >
+            <span className="font-display text-sm leading-none">{spec.label}</span>
+            <span className="text-[0.65rem] leading-tight text-cream-400">{spec.blurb}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Host side
 // ---------------------------------------------------------------------------
 
@@ -79,7 +163,9 @@ function HostShare({ engine }: { engine: SyncEngine }) {
   const adapterRef = React.useRef<ScreenShareAdapter | null>(null);
 
   const [sharing, setSharing] = React.useState(false);
+  const [preset, setPreset] = React.useState<SharePreset>(DEFAULT_SHARE_PRESET);
   const [peerStates, setPeerStates] = React.useState<Record<string, PeerConnState>>({});
+  const [stats, setStats] = React.useState<ShareStats | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
   // Keep a stable place to read participant names for the per-viewer row.
@@ -121,12 +207,31 @@ function HostShare({ engine }: { engine: SyncEngine }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection, selfId, engine]);
 
+  // Live stats chip: poll getShareStats every 3s while sharing.
+  React.useEffect(() => {
+    if (!sharing) {
+      setStats(null);
+      return;
+    }
+    let alive = true;
+    const sample = async () => {
+      const s = await meshRef.current?.getShareStats();
+      if (alive) setStats(s ?? null);
+    };
+    void sample();
+    const id = window.setInterval(() => void sample(), 3000);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+  }, [sharing]);
+
   async function startSharing() {
     const mesh = meshRef.current;
     if (!mesh) return;
     setError(null);
     try {
-      const stream = await mesh.startSharing();
+      const stream = await mesh.startSharing({ preset });
       adapterRef.current?.attachStream(stream);
       setSharing(true);
       send({ type: 'screen:start' });
@@ -151,10 +256,12 @@ function HostShare({ engine }: { engine: SyncEngine }) {
     adapterRef.current?.attachStream(null);
     setSharing(false);
     setPeerStates({});
+    setStats(null);
     send({ type: 'screen:stop' });
   }
 
   const viewerEntries = Object.entries(peerStates);
+  const watching = stats?.viewers ?? viewerEntries.length;
 
   return (
     <div className="absolute inset-0 flex flex-col">
@@ -167,7 +274,11 @@ function HostShare({ engine }: { engine: SyncEngine }) {
               <MonitorUp />
             </div>
             <p className="max-w-sm font-body text-sm text-cream-300">
-              you&apos;re the one sharing — hit the button and pick a tab or window
+              you&apos;re the one sharing — pick a quality, then grab a tab or window
+            </p>
+            <PresetPicker value={preset} onChange={setPreset} />
+            <p className="max-w-sm font-body text-xs text-cream-400">
+              sharper than discord, lighter on your upload
             </p>
             <Button variant="accent" size="lg" onClick={startSharing}>
               <MonitorUp />
@@ -181,6 +292,11 @@ function HostShare({ engine }: { engine: SyncEngine }) {
       {sharing && (
         <div className="flex flex-wrap items-center gap-2 border-t border-couch-700 bg-couch-850/90 px-4 py-2.5">
           <Badge variant="live">🔴 you&apos;re sharing</Badge>
+          {stats && (
+            <StatsChip>
+              {stats.height}p · {stats.fps}fps · {fmtBitrate(stats.kbpsUp)} · {watching} watching
+            </StatsChip>
+          )}
           {viewerEntries.length === 0 ? (
             <span className="font-body text-xs text-cream-400">
               waiting for the couch to tune in…
@@ -221,6 +337,7 @@ function ViewerShare({ engine, sharerId }: { engine: SyncEngine; sharerId: strin
 
   const [connState, setConnState] = React.useState<PeerConnState>('connecting');
   const [hasStream, setHasStream] = React.useState(false);
+  const [stats, setStats] = React.useState<ViewerStats | null>(null);
 
   React.useEffect(() => {
     if (!connection) return;
@@ -261,6 +378,25 @@ function ViewerShare({ engine, sharerId }: { engine: SyncEngine; sharerId: strin
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection, selfId, sharerId, engine]);
+
+  // Inbound-kbps chip: poll getViewerStats every 3s once a stream is flowing.
+  React.useEffect(() => {
+    if (!hasStream) {
+      setStats(null);
+      return;
+    }
+    let alive = true;
+    const sample = async () => {
+      const s = await meshRef.current?.getViewerStats();
+      if (alive) setStats(s ?? null);
+    };
+    void sample();
+    const id = window.setInterval(() => void sample(), 3000);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+  }, [hasStream]);
 
   const connectedCount = state
     ? Object.values(state.participants).filter((p) => p.connected).length
@@ -307,8 +443,9 @@ function ViewerShare({ engine, sharerId }: { engine: SyncEngine; sharerId: strin
 
       <div className="flex flex-wrap items-center gap-2 border-t border-couch-700 bg-couch-850/90 px-4 py-2.5">
         <PeerStateChip state={connState} />
+        {stats && <StatsChip>{fmtBitrate(stats.kbpsDown)} down</StatsChip>}
         <span className="font-body text-xs text-cream-400">
-          best for small rooms — quality depends on the host&apos;s upload
+          sharper than discord, lighter on your upload
         </span>
         {crowded && (
           <Badge variant="live" className="ml-auto gap-1">

@@ -18,7 +18,7 @@
  */
 
 import * as React from 'react';
-import { Film, Link2, Volume2 } from 'lucide-react';
+import { Film, Link2, Tv, Volume2 } from 'lucide-react';
 import { useRoom } from '@/lib/realtime/room-context';
 import {
   SyncEngine,
@@ -37,6 +37,7 @@ import { ScreenSharePlayer } from './players/ScreenSharePlayer';
 import { SyncIndicator } from './SyncIndicator';
 import { SparkCountdown } from './SparkCountdown';
 import { ReactionLayer } from './ReactionLayer';
+import { ExplorePanel } from './ExplorePanel';
 
 // ---------------------------------------------------------------------------
 // Quick-add catalog for the idle screen
@@ -81,6 +82,9 @@ function IdleScreen({
   canControl: boolean;
   onQuickAdd: (item: NewQueueItem) => void;
 }) {
+  // local-only: the "channel surf" browser opens from this idle screen.
+  const [exploreOpen, setExploreOpen] = React.useState(false);
+
   return (
     <div className="absolute inset-0 flex flex-col items-center justify-center gap-5 bg-couch-950 px-6 text-center">
       {/* very dark warm screen with a faint standby sheen + reflection */}
@@ -95,6 +99,20 @@ function IdleScreen({
       <div className="relative z-10 space-y-1.5">
         <p className="font-display text-xl text-cream-200">the tv&apos;s off</p>
         <p className="font-body text-sm text-cream-400">queue something to start the night</p>
+      </div>
+
+      {/* channel surf — open to everyone; the panel itself gates play-now on
+          control and queue-it on the room's guest-add setting */}
+      <div className="relative z-10">
+        <Button
+          variant="accent"
+          size="sm"
+          onClick={() => setExploreOpen(true)}
+          className="glow-ember gap-1.5"
+        >
+          <Tv />
+          channel surf 📺
+        </Button>
       </div>
 
       {canControl && (
@@ -123,6 +141,8 @@ function IdleScreen({
           waiting on whoever has the remote 📺
         </p>
       )}
+
+      <ExplorePanel open={exploreOpen} onClose={() => setExploreOpen(false)} />
     </div>
   );
 }
