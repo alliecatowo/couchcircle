@@ -17,12 +17,16 @@ import { ConnectionHealth } from '@/components/room/ConnectionHealth';
  * settings gear. Receives `onOpenSettings` from RoomShell's local state lift.
  */
 export function TopBar({ onOpenSettings }: { onOpenSettings: () => void }) {
-  const { state, canControl, isHost, isController, send } = useRoom();
+  const { state, canControl, isHost, isController, send, connectionStatus } = useRoom();
 
   const roomName = state?.settings.roomName?.trim() || 'the couch';
   const joinCode = state?.joinCode ?? '';
   const passwordEnabled = state?.passwordEnabled ?? false;
   const seshEnabled = state?.sesh.enabled ?? false;
+  // crew = connected participants only
+  const crewCount = state
+    ? Object.values(state.participants).filter((p) => p.connected).length
+    : 0;
   // Sesh Mode can only be toggled by whoever's holding the remote (or the host).
   const canToggleSesh = isHost || isController || canControl;
 
@@ -77,36 +81,44 @@ export function TopBar({ onOpenSettings }: { onOpenSettings: () => void }) {
         )}
       </div>
 
-      {/* join-code chip → copy invite link */}
-      <button
-        type="button"
-        onClick={copyInvite}
-        disabled={!joinCode}
-        className="group relative inline-flex items-center disabled:opacity-50"
-        aria-label="copy invite link"
-      >
-        <Badge
-          variant="accent"
-          className="cursor-pointer gap-1.5 px-3 py-1 font-mono transition-colors group-hover:bg-ember-500/25"
+      {/* couch-code chip → copy invite link */}
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={copyInvite}
+          disabled={!joinCode}
+          className="group relative inline-flex items-center disabled:opacity-50"
+          aria-label="copy couch code invite link"
         >
-          {copied ? <Check className="size-3" /> : null}
-          {copied ? 'copied 🛋️' : joinCode || '…'}
-        </Badge>
-        <AnimatePresence>
-          {copied && (
-            <motion.span
-              key="copied-flourish"
-              initial={{ y: 4, opacity: 0, scale: 0.9 }}
-              animate={{ y: -2, opacity: 1, scale: 1 }}
-              exit={{ y: -8, opacity: 0 }}
-              transition={{ duration: 0.25 }}
-              className="pointer-events-none absolute left-1/2 top-full mt-1 -translate-x-1/2 whitespace-nowrap text-[0.7rem] text-ember-300"
-            >
-              invite link copied
-            </motion.span>
-          )}
-        </AnimatePresence>
-      </button>
+          <Badge
+            variant="accent"
+            className="cursor-pointer gap-1.5 px-3 py-1 font-mono transition-colors group-hover:bg-ember-500/25"
+          >
+            {copied ? <Check className="size-3" /> : null}
+            {copied ? 'copied 🛋️' : joinCode || '…'}
+          </Badge>
+          <AnimatePresence>
+            {copied && (
+              <motion.span
+                key="copied-flourish"
+                initial={{ y: 4, opacity: 0, scale: 0.9 }}
+                animate={{ y: -2, opacity: 1, scale: 1 }}
+                exit={{ y: -8, opacity: 0 }}
+                transition={{ duration: 0.25 }}
+                className="pointer-events-none absolute left-1/2 top-full mt-1 -translate-x-1/2 whitespace-nowrap text-[0.7rem] text-ember-300"
+              >
+                invite link copied
+              </motion.span>
+            )}
+          </AnimatePresence>
+        </button>
+        {/* crew counter — only when we have data and are connected */}
+        {crewCount > 0 && connectionStatus === 'connected' && (
+          <span className="text-xs text-cream-400 tabular-nums">
+            {crewCount} on the couch
+          </span>
+        )}
+      </div>
 
       {/* spacer */}
       <div className="flex-1" />

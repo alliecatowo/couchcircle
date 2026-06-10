@@ -70,17 +70,17 @@ export function JoinRoomCard({ className }: JoinRoomCardProps) {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <ArrowRight className="size-5 text-moss-400" />
-          join the circle
+          flop on in
         </CardTitle>
         <CardDescription>
-          got a code? flop on in 🛋️
+          got a couch code? slide on over 🛋️
         </CardDescription>
       </CardHeader>
 
       <CardContent>
         <form onSubmit={handleJoin} className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="join-code">room code</Label>
+            <Label htmlFor="join-code">couch code</Label>
             <Input
               id="join-code"
               placeholder="MOSS-420"
@@ -117,7 +117,7 @@ export function JoinRoomCard({ className }: JoinRoomCardProps) {
             disabled={loading || (!structurallyValid && raw.length > 0)}
             className="mt-1 w-full"
           >
-            {loading ? 'finding the couch…' : 'join the circle'}
+            {loading ? 'finding the couch…' : 'flop on in'}
           </Button>
         </form>
       </CardContent>

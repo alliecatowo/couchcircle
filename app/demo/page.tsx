@@ -25,8 +25,8 @@ export default function DemoPage() {
           how to demo CouchCircle
         </h1>
         <p className="text-cream-300 text-base leading-relaxed mb-8">
-          You can run the whole thing locally, in two browser tabs, in about
-          two minutes. No accounts, no API keys, no cloud required.
+          you can run the whole thing locally, in two browser tabs, in about
+          two minutes. no accounts, no API keys, no cloud required.
         </p>
 
         <Separator className="mb-8" />
@@ -35,15 +35,15 @@ export default function DemoPage() {
         <Section title="step 1 — spin up the servers">
           <StepBlock>
             <p className="text-cream-300 text-sm mb-3">
-              You need the Next.js frontend and the PartyKit server running at
-              the same time. The easiest way:
+              you need the Next.js frontend and the PartyKit server running at
+              the same time. the easiest way:
             </p>
             <CodeBlock>{`npm run dev:all`}</CodeBlock>
             <p className="text-cream-300 text-sm mt-3">
-              This runs <code className="code-inline">npm run dev</code> (Next,
+              this runs <code className="code-inline">npm run dev</code> (Next,
               port 3000) and{' '}
               <code className="code-inline">npm run dev:party</code> (PartyKit,
-              port 1999) concurrently. Keep the terminal open.
+              port 1999) concurrently. keep the terminal open.
             </p>
           </StepBlock>
         </Section>
@@ -54,7 +54,7 @@ export default function DemoPage() {
         <Section title="step 2 — open two browser tabs">
           <StepBlock>
             <p className="text-cream-300 text-sm">
-              Open{' '}
+              open{' '}
               <a
                 href="http://localhost:3000"
                 className="text-ember-400 hover:text-ember-300 underline underline-offset-2 transition-colors"
@@ -64,8 +64,8 @@ export default function DemoPage() {
                 http://localhost:3000
               </a>{' '}
               in two separate tabs (or two different browsers — Chrome + Firefox
-              works great for testing multi-user stuff). They&apos;ll act as
-              two separate viewers.
+              works great for testing multi-creature stuff). they&apos;ll act as
+              two separate crew members.
             </p>
           </StepBlock>
         </Section>
@@ -73,12 +73,12 @@ export default function DemoPage() {
         <Separator className="my-8" />
 
         {/* Step 3 */}
-        <Section title="step 3 — roll up a demo room">
+        <Section title="step 3 — roll up a demo couch">
           <StepBlock>
             <p className="text-cream-300 text-sm mb-4">
-              Use the button below to create a room pre-loaded with sample
-              videos. Copy the join code from the room and paste it in your
-              second tab to join as a second viewer.
+              use the button below to roll up a couch pre-loaded with sample
+              videos. copy the couch code and paste it in your second tab to
+              flop on in as a second crew member.
             </p>
             {/* Client component — button that calls createRoom() with seedDemo */}
             <DemoRoomButton />
@@ -92,29 +92,29 @@ export default function DemoPage() {
           <StepBlock>
             <ul className="list-disc pl-5 space-y-2 text-cream-300 text-sm">
               <li>
-                <strong className="text-cream-100">Queue panel</strong> (right
-                side) — the room comes with three sample videos already in the
-                queue. Click ▶ on any item to start playing.
+                <strong className="text-cream-100">up next panel</strong> (right
+                side) — the couch comes with three sample videos in the queue.
+                hit ▶ on any item to start playing.
               </li>
               <li>
-                <strong className="text-cream-100">Remote Controls</strong>{' '}
-                (bottom bar) — play, pause, scrub, rate. The tab that created
-                the room starts as host+controller. The second tab can request
-                the remote.
+                <strong className="text-cream-100">the remote</strong>{' '}
+                (bottom bar) — play, pause, scrub, rate. the tab that rolled up
+                the couch starts as host with the remote. the second tab can
+                request it.
               </li>
               <li>
-                <strong className="text-cream-100">Chat / Activity</strong>{' '}
-                (right panel tabs) — send messages between tabs. Activity shows
+                <strong className="text-cream-100">chat / activity</strong>{' '}
+                (right panel tabs) — send messages between tabs. activity shows
                 every room event.
               </li>
               <li>
-                <strong className="text-cream-100">Sesh Mode</strong> (top-bar
+                <strong className="text-cream-100">sesh mode</strong> (top-bar
                 toggle, host only) — enables rotation, spark countdown, snack
-                votes. Try it with both tabs open and watch the sync.
+                votes. try it with both tabs open and watch the crew sync up.
               </li>
               <li>
-                <strong className="text-cream-100">Screen share</strong> — open
-                the Add to Queue dialog, pick the Screen Share tab. Works best
+                <strong className="text-cream-100">screen share</strong> — open
+                the add to queue dialog, pick the screen share tab. works best
                 when both tabs are in the same browser session (no NAT issues).
               </li>
             </ul>
@@ -126,7 +126,7 @@ export default function DemoPage() {
         {/* Sample URLs */}
         <Section title="sample video URLs">
           <p className="text-cream-300 text-sm mb-4">
-            Copy these into the queue&apos;s &quot;direct URL&quot; or
+            paste these into the queue&apos;s &quot;direct URL&quot; or
             &quot;YouTube&quot; tab to test different adapters:
           </p>
           <div className="space-y-3">
@@ -145,17 +145,17 @@ export default function DemoPage() {
               <strong className="text-cream-100">
                 &quot;the room service is asleep&quot;
               </strong>{' '}
-              — the PartyKit server isn&apos;t running on port 1999. Make sure{' '}
+              — the PartyKit server isn&apos;t running on port 1999. make sure{' '}
               <code className="code-inline">dev:all</code> is running.
             </li>
             <li>
-              <strong className="text-cream-100">Direct URL won&apos;t play</strong>{' '}
-              — CORS is probably blocking it. The sample URLs above have
+              <strong className="text-cream-100">direct URL won&apos;t play</strong>{' '}
+              — CORS is probably blocking it. the sample URLs above have
               correct headers; random links from the web usually don&apos;t.
             </li>
             <li>
               <strong className="text-cream-100">HLS won&apos;t load</strong>{' '}
-              — hls.js is loaded dynamically; give it a moment on first load.
+              — hls.js loads dynamically; give it a moment on first load.
             </li>
           </ul>
         </Section>

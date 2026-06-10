@@ -33,11 +33,18 @@ import { RoomSettings } from '@/components/room/RoomSettings';
  *   ─────────────────────────────────────────────
  *   RemoteControls (bottom bar)
  *
- * The stage column is a vertical flex: the TV block flexes to fill the space
- * (min-h-0 so it can shrink), then the couch band and sesh tray sit BELOW it as
- * flex-none rows — nothing floats on top of the TV picture anymore. The
- * RotationPanel docks into the stage column's bottom-left (it self-positions
- * absolute and we anchor it here so it never covers the screen).
+ * The stage column is a vertical flex with three rows that must coexist without
+ * ever page-scrolling:
+ *   - the TV section: `flex-1` to take the slack, but floored at `min-h-[40%]`
+ *     of the column so at short window heights (~700px and below) it can't get
+ *     crushed to a sliver by the seating band + sesh tray below it.
+ *   - the seating band (`flex-none`): keeps its intrinsic height but runs its
+ *     OWN responsive compression internally (sibling agent) — it gives up height
+ *     before the TV does.
+ *   - the sesh tray (`flex-none`): renders nothing when sesh is off.
+ * Nothing floats on top of the TV picture anymore. The RotationPanel docks into
+ * the stage column's bottom-left (it self-positions absolute and we anchor it
+ * here so it never covers the screen).
  *
  * On < lg the right column drops beneath the stage. The JoinGate overlay covers
  * everything until `joinPhase === 'joined'`; the other overlays float above the
@@ -65,12 +72,15 @@ export function RoomShell({ code }: { code: string }) {
               `relative` makes this the positioning context the RotationPanel
               docks against (bottom-left, clear of the TV). */}
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col gap-3">
-            {/* the WALL + contained TV — flexes to fill, never overlapped.
-                flex-1 min-h-0 gives this a DEFINITE height inside the column so
-                the TV's percentage/max-h sizing has something to resolve against.
-                It's itself a centering flex box (items-center justify-center) so
-                the MediaStage section can letterbox-fit the available area. */}
-            <div className="relative z-0 flex min-h-0 flex-1 items-center justify-center px-6 py-4">
+            {/* the WALL + contained TV — takes the column's slack (flex-1) but is
+                floored at min-h-[40%] so the seating band + sesh tray can never
+                squeeze it into a thin strip on short windows. The percentage is
+                resolved against the stage column's definite height (min-h-0 on
+                the column lets that height be the row's, not the content's). The
+                seating band compresses first because it's flex-none with its own
+                internal responsive treatment. It's a centering flex box so the
+                MediaStage can letterbox-fit the available area. */}
+            <div className="relative z-0 flex min-h-[40%] flex-1 items-center justify-center px-2 py-2 sm:px-4 sm:py-3 lg:px-6 lg:py-4">
               <MediaStage />
             </div>
             {/* the couch band — sits below the TV, never on top of it */}

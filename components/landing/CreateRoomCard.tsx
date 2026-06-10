@@ -71,7 +71,7 @@ export function CreateRoomCard({
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Sofa className="size-5 text-ember-400" />
-          roll up a room
+          roll up a couch
         </CardTitle>
         <CardDescription>
           you&apos;re the host — the remote is yours 🎮
@@ -124,7 +124,7 @@ export function CreateRoomCard({
             disabled={loading}
             className="mt-1 w-full glow-ember"
           >
-            {loading ? 'warming up…' : 'roll up a room'}
+            {loading ? 'warming up…' : 'roll up a couch'}
           </Button>
         </form>
       </CardContent>

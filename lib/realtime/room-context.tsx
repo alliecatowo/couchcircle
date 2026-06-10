@@ -103,6 +103,11 @@ export function RoomProvider({
     ts: number;
   } | null>(null);
   const [reactions, setReactions] = useState<ReactionBurst[]>([]);
+  /**
+   * True once the underlying socket has fired `open` and room:join can actually
+   * be sent. Drops back to false on close/reconnect; rises again on the next open.
+   */
+  const [joinReady, setJoinReady] = useState<boolean>(false);
 
   // ---- refs (not causing re-renders) ----
   const connectionRef = useRef<RoomConnection | null>(null);
@@ -113,6 +118,11 @@ export function RoomProvider({
     null,
   );
   const lastErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * Belt-and-braces: if join() is called before the socket has opened, we
+   * queue the opts here and fire the actual room:join when the socket opens.
+   */
+  const pendingJoinRef = useRef<{ identity: IdentitySnapshot; password?: string } | null>(null);
 
   // ---- auto-clear lastError after 6s ----
   function setLastErrorWithAutoClear(
@@ -153,7 +163,6 @@ export function RoomProvider({
   const join = useCallback(
     ({ identity, password }: { identity: IdentitySnapshot; password?: string }): void => {
       const conn = connectionRef.current;
-      if (!conn) return;
 
       // Check for pending-create payload (written by landing page)
       const pending = readPendingCreate(code);
@@ -161,6 +170,13 @@ export function RoomProvider({
       // Persist so we can re-send on reconnect — a creator's password lives in
       // the pending-create payload, not the gate form, so merge it here too.
       joinOptsRef.current = { identity, password: pending?.password ?? password };
+
+      if (!conn) {
+        // [sync] no connection yet — queue the join to fire on the next open
+        console.debug('[couchcircle:join] connection not ready — queueing join', { identity });
+        pendingJoinRef.current = { identity, password: pending?.password ?? password };
+        return;
+      }
 
       const msg: Parameters<typeof conn.send>[0] = {
         type: 'room:join',
@@ -238,14 +254,29 @@ export function RoomProvider({
       const handleOpen = (): void => {
         if (cancelled) return;
         setConnectionStatus('connected');
+        // Socket is open — room:join can now be sent
+        setJoinReady(true);
+        // [sync] socket open — joinReady=true
+        console.debug('[couchcircle:joinReady] socket open → joinReady=true');
         if (hasJoinedRef.current) {
           // Reconnected after a prior join — re-send join automatically
           resendJoin();
+        } else if (pendingJoinRef.current) {
+          // Belt-and-braces: drain a join() that was called before the socket opened
+          const pending = pendingJoinRef.current;
+          pendingJoinRef.current = null;
+          console.debug('[couchcircle:join] draining queued join on open', pending);
+          // Re-invoke the full join() logic so pending-create is picked up correctly
+          join(pending);
         }
       };
 
       const handleClose = (): void => {
         if (cancelled) return;
+        // Socket closed — room:join cannot be sent until re-opened
+        setJoinReady(false);
+        // [sync] socket close — joinReady=false
+        console.debug('[couchcircle:joinReady] socket close → joinReady=false');
         if (hasJoinedRef.current) {
           setConnectionStatus('reconnecting');
         } else {
@@ -321,12 +352,15 @@ export function RoomProvider({
       cancelled = true;
       conn?.close();
       connectionRef.current = null;
+      // Socket is gone — joinReady must be false until a new connection opens
+      setJoinReady(false);
       if (lastErrorTimerRef.current) {
         clearTimeout(lastErrorTimerRef.current);
         lastErrorTimerRef.current = null;
       }
     };
-    // `code` and `resendJoin` are stable; eslint-disable is fine
+    // `code`, `resendJoin`, and `join` are all stable within a given `code` value;
+    // adding them to deps would cause no extra reruns but the lint rule is noisy.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code]);
 
@@ -355,6 +389,7 @@ export function RoomProvider({
     canControl,
     connectionStatus,
     joinPhase,
+    joinReady,
     joinError,
     // Cast is safe — both have the same shape; we narrowed ErrorCode usage above
     lastError: lastError as RoomContextValue['lastError'],

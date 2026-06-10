@@ -2,7 +2,34 @@
 
 > **watch together, actually together.**
 
-CouchCircle is a cozy real-time browser watch-party app built for the group chat that actually shows up. One room, one shared queue, one remote that gets passed around — YouTube, direct media links, or P2P screen share, all kept in sync by an authoritative server clock so nobody's a scene ahead. Throw in a social layer for the rituals that go along with watching things, a spark countdown that fires at the exact same moment for everyone, and a blunt rotation tracker because passing things around a couch — even a digital one — is a whole vibe. No accounts, no payments, no algorithms. Just your friends, melted into a couch.
+CouchCircle is a cozy real-time browser watch-party app built for the group chat that actually shows up. one room, one shared queue, the remote gets passed around — YouTube, direct media links, or P2P screen share, all kept in sync by an authoritative server clock so nobody's a scene ahead. throw in a social layer for the rituals that go along with watching things, a spark countdown that fires at the exact same moment for everyone, and a blunt rotation tracker because passing things around a couch — even a digital one — is a whole vibe. no accounts, no payments, no algorithms. just your friends, melted into a couch.
+
+---
+
+## the concepts
+
+CouchCircle has a product bible. read it if you're building anything in here:
+
+- **[CONCEPTS.md](CONCEPTS.md)** — what everything *is*: the couch, the crew, the remote, the glow, sesh mode, seat map, copy voice, hard boundaries
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — how it works: module contracts, message protocol, sync engine, adapter behavior
+- **[DESIGN.md](DESIGN.md)** — how it looks: color tokens, typography, motion, components
+- **[SECURITY.md](SECURITY.md)** — the threat model, what we protect, how to report a problem
+
+---
+
+## screenshots
+
+![the landing](docs/screenshots/landing.png)
+*roll up a couch or flop into one — the living room before anyone arrives*
+
+![the couch](docs/screenshots/room.png)
+*the crew, the tv, the remote — a real room, not a dashboard*
+
+![two tabs in sync](docs/screenshots/sync-two-windows.png)
+*two tabs, same moment — the sync indicator holds them together*
+
+![sesh mode](docs/screenshots/sesh.png)
+*sesh mode on — the rotation is live, the spark is counting down*
 
 ---
 
@@ -131,10 +158,10 @@ all three adapters sit behind one `MediaAdapter` interface (`lib/media/adapter.t
 
 | adapter | file | notes |
 |---|---|---|
-| `YouTubeAdapter` | `lib/media/youtube.ts` | YouTube IFrame API; singleton script loader |
-| `DirectUrlAdapter` | `lib/media/direct-url.ts` | `<video>` tag; hls.js for `.m3u8` |
+| `YouTubeAdapter` | `lib/media/youtube.ts` | YouTube IFrame API; singleton script loader; muted-autoplay fallback |
+| `DirectUrlAdapter` | `lib/media/direct-url.ts` | `<video>` tag; hls.js for `.m3u8`; muted-autoplay fallback |
 | `ScreenShareAdapter` | `lib/media/screen-share.ts` | `isLive=true`, `canSeek/canPause=false` |
-| `HostedUploadAdapter` | `lib/media/hosted-upload-stub.ts` | stub — throws; see §future below |
+| `HostedUploadAdapter` | `lib/media/hosted-upload-stub.ts` | stub — throws; see future roadmap below |
 
 ### repo map
 
@@ -151,19 +178,20 @@ party/
   rate-limit.ts        — sliding window rate limiter (per connection, per category)
 
 lib/
-  identity.ts          — localStorage identity: load/save/ensureIdentity
+  identity.ts          — tab-scoped participant id (sessionStorage) + localStorage prefs
   utils.ts             — cn() for class merging
   realtime/
     types.ts           — ConnectionStatus, JoinPhase, RoomContextValue
     connection.ts      — PartySocket wrapper, ping/pong clock sync, lobby HTTP calls
     room-context.tsx   — RoomProvider + useRoom() hook
   sync/
-    sync-engine.ts     — drift detection, heartbeat, scheduled play, rate nudge
+    sync-engine.ts     — drift detection, heartbeat, scheduled play, rate nudge,
+                         muted-autoplay tracking, paused-state enforcement
   media/
-    adapter.ts         — MediaAdapter interface
-    youtube.ts         — YouTubeAdapter
+    adapter.ts         — MediaAdapter interface (wasAutoplayMuted/unmute optional)
+    youtube.ts         — YouTubeAdapter (poll-detect autoplay strategy, isDestroyed)
     url-parse.ts       — parseYouTubeUrl, classifyDirectUrl, isProbablyMediaUrl
-    direct-url.ts      — DirectUrlAdapter (video tag + hls.js)
+    direct-url.ts      — DirectUrlAdapter (video tag + hls.js, isDestroyed)
     screen-share.ts    — ScreenShareAdapter
     hosted-upload-stub.ts — HostedUploadAdapter stub + roadmap notes
   webrtc/
@@ -176,14 +204,15 @@ components/
   room/
     RoomShell.tsx      — layout wrapper + RoomProvider
     TopBar.tsx         — room name, join code chip, sesh toggle, connection health
-    JoinGate.tsx       — name/avatar/password porch
-    MediaStage.tsx     — the TV: player selection, SyncEngine wiring, overlays
-    players/           — YouTubePlayer, DirectUrlPlayer, ScreenSharePlayer
+    JoinGate.tsx       — name/avatar/password porch (gated on joinReady)
+    MediaStage.tsx     — the tv: player selection, SyncEngine wiring, click-shield, overlays
+    players/           — YouTubePlayer, DirectUrlPlayer, ScreenSharePlayer (keyed by item.id)
     QueuePanel.tsx     — queue list, vote, reorder, add dialog
-    SidePanel.tsx      — Chat + Activity Log tabs
+    SidePanel.tsx      — chat + activity log tabs
     RemoteControls.tsx — play/pause/scrub/rate, remote ownership, emergency pause
     SeshControls.tsx   — rotation, spark, status quick-set, room actions
-    ParticipantCircle.tsx — the couch row
+    ParticipantCircle.tsx — the couch row (12-seat map per CONCEPTS §4)
+    seating/           — seat map geometry and positioning
     …and more
 
 app/
@@ -244,7 +273,10 @@ direct URL playback uses a `<video>` tag pointed at the URL you paste. this mean
 
 ### autoplay policy
 
-modern browsers block `video.play()` until the user has gestured on the page. joining and clicking anything counts as a gesture, but if you land in a room and the video is already playing, you might see a **"tap to sync up"** overlay. tap it — the sync engine will resume and seek you into the right position.
+modern browsers block `video.play()` until the user has gestured on the page. joining and clicking anything counts as a gesture, but if you land in a room and the video is already playing, you might hit one of two paths:
+
+- **direct URL / muted autoplay:** the adapter falls back to muted playback and shows a **"tap to unmute"** pill at the bottom of the tv. one tap and you're back in sync with audio.
+- **YouTube autoplay block:** the IFrame API `playVideo()` can only be unblocked by a click *inside* the embed itself. the click-shield drops so your tap reaches YouTube's own ▶, and a hint banner tells you what to do.
 
 ### rooms are ephemeral
 
@@ -252,18 +284,20 @@ room state lives in PartyKit's in-memory store with a throttled `room.storage` s
 
 ### join codes are short
 
-`WORD-NNN` codes are designed for humans to type and share verbally. they're not secret by themselves — there are only a few thousand combinations per word, and the wordlist is not secret. if you want a private room, **use the optional password**. the lobby never lists rooms, there's no directory, and room IDs are UUIDs — so the room itself is unguessable even if someone knows the code format.
+`WORD-NNN` couch codes are designed for humans to type and share verbally. they're not secret by themselves — there are only a few thousand combinations per word, and the wordlist is not secret. if you want a private couch, **use the optional password**. the lobby never lists rooms, there's no directory, and room IDs are UUIDs — so the room itself is unguessable even if someone knows the code format.
 
 ---
 
 ## security and abuse posture
+
+see **[SECURITY.md](SECURITY.md)** for the full threat model. short version:
 
 - **unguessable room IDs** behind short human codes via the lobby — no room directory, no listing endpoint, no server-side URL proxying
 - **optional password** per room — stored as private server state, never in `RoomState`, never broadcast
 - **rate limits** on every operation category (chat 5/5s, media commands 10/3s, queue ops 10/10s, reactions 10/5s, join 5/10s, room actions 4/5s)
 - **sanitized chat:** control chars stripped, 500 char cap, empty messages dropped; names capped at 24 chars; URLs validated as `http(s)` and capped at 2000 chars
 - no recording, no server-side media proxying, no URL fetching on behalf of clients
-- `dangerouslySetInnerHTML` is never used anywhere — user text is always React text nodes
+- `dangerouslySetInnerHTML` is never used — user text is always React text nodes
 
 ---
 
@@ -296,13 +330,13 @@ the codebase has a stub at `lib/media/hosted-upload-stub.ts` and a `hosted-uploa
 4. **everyone streams from the same hosted object** — no CORS issues, no peer dependency
 5. the object has a **TTL** (e.g. 24h) and a size cap; after expiry it's gone
 
-this solves the "I have a file on my laptop" use case without requiring screen share quality or CORS luck. it's marked clearly as not-built in the UI (a disabled card in the Add to Queue dialog with a "coming later" label). the protocol types are already wired so the feature can be added without breaking changes.
+this solves the "I have a file on my laptop" use case without requiring screen share quality or CORS luck. it's marked clearly as not-built in the UI (a disabled card in the add to queue dialog with a "coming later" label). the protocol types are already wired so the feature can be added without breaking changes.
 
 ---
 
 ## sesh mode
 
-sesh mode is a **social ritual layer**. it tracks whose turn it is, counts down a synchronized moment, lets you log your status on the couch (rolling, sparking, couchlocked, needs-water, etc.), vote on snack runs, and do the collective things a room does together.
+sesh mode is a **social ritual layer**. it tracks whose turn it is, counts down a synchronized moment, lets you log your vibe on the couch (rolling, sparking, couchlocked, needs-water, etc.), vote on snack runs, and do the collective things a room does together.
 
 it does not provide substance advice, dosing information, procurement guidance, or anything of the kind. it's vibes. it's a tracker for couch rituals that happen to be social. use it for anything — passing the aux cord, synchronized tea ceremonies, the ceremonial opening of the chips bag, or whatever your couch does.
 

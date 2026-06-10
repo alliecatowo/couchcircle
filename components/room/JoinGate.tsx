@@ -21,7 +21,7 @@ import { AvatarSprite } from '@/components/avatars';
  * name/avatar/accent/password form itself.
  */
 export function JoinGate() {
-  const { joinPhase, joinError, join } = useRoom();
+  const { joinPhase, joinError, join, joinReady } = useRoom();
 
   // Seed the form from the persisted identity (or a freshly-minted random one).
   const initial = useMemo(() => ensureIdentity(), []);
@@ -49,10 +49,12 @@ export function JoinGate() {
   }, [wrongPassword, joinError]);
 
   const joining = joinPhase === 'joining';
+  // can only submit when the socket is open and not already joining
+  const canSubmit = joinReady && !joining;
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (joining) return;
+    if (!canSubmit) return;
     const trimmed = name.trim() || initial.name;
     const identity = { ...initial, name: trimmed, avatar, accent };
     saveIdentity(identity);
@@ -106,6 +108,9 @@ export function JoinGate() {
                       id="join-name"
                       value={name}
                       onChange={(e) => setName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !canSubmit) e.preventDefault();
+                      }}
                       placeholder="Blanket Wizard"
                       maxLength={24}
                       autoComplete="off"
@@ -220,15 +225,20 @@ export function JoinGate() {
                     type="submit"
                     variant="accent"
                     size="lg"
-                    disabled={joining}
-                    className="glow-ember mt-1 w-full"
-                    style={{ backgroundColor: accent, color: '#100b09' }}
+                    disabled={!canSubmit}
+                    className={cn(
+                      'glow-ember mt-1 w-full',
+                      !joinReady && !joining && 'animate-pulse',
+                    )}
+                    style={canSubmit ? { backgroundColor: accent, color: '#100b09' } : undefined}
                   >
                     {joining ? (
                       <>
                         <Loader2 className="size-4 animate-spin" />
                         finding your spot…
                       </>
+                    ) : !joinReady ? (
+                      'warming up the couch…'
                     ) : (
                       'slide onto the couch'
                     )}

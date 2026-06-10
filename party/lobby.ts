@@ -32,18 +32,81 @@ const LOBBY_RATE = { limit: 12, windowMs: 60_000 } as const;
 /** How many times we retry on a join-code collision before giving up. */
 const CODE_RETRIES = 40;
 
-/** CORS headers applied to every lobby response, including the preflight. */
-const CORS_HEADERS: Record<string, string> = {
-  'Access-Control-Allow-Origin': '*',
+/** Methods/headers we accept; the allowed *origin* is decided per-request (see CORS below). */
+const CORS_STATIC_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
+  // Caches must key on Origin since we reflect it conditionally (avoids a
+  // permissive response being cached for a disallowed origin).
+  Vary: 'Origin',
 };
 
+/**
+ * Resolve the `Access-Control-Allow-Origin` value for one request.
+ *
+ * Production intent: set `ALLOWED_ORIGINS` (comma-separated) on the PartyKit
+ * deploy (e.g. `https://couchcircle.app,https://www.couchcircle.app`). We then
+ * reflect the request `Origin` ONLY when it appears in that allowlist — never a
+ * wildcard. A wildcard would let any site on the internet call the lobby and
+ * mint/resolve room codes from a victim's browser.
+ *
+ * Dev convenience (when `ALLOWED_ORIGINS` is unset): allow localhost/127.0.0.1
+ * origins on any port, and echo whatever origin asked so two-tab local testing
+ * and LAN devices "just work". This branch is intentionally permissive and is
+ * the reason production MUST set `ALLOWED_ORIGINS`.
+ *
+ * Returns the exact origin string to reflect, or `null` when the request's
+ * origin is not allowed (caller omits the ACAO header entirely → browser blocks).
+ */
+function resolveAllowedOrigin(origin: string | null, env: Record<string, unknown>): string | null {
+  const configured = parseAllowedOrigins(env.ALLOWED_ORIGINS);
+
+  // Production / explicit allowlist: reflect only exact matches.
+  if (configured.length > 0) {
+    if (!origin) return null;
+    return configured.includes(origin) ? origin : null;
+  }
+
+  // No allowlist configured → dev mode. No Origin header (curl, same-origin,
+  // server-to-server) needs no CORS, so signal "*" is unnecessary by returning
+  // null; browsers that DO send an Origin get it echoed back below.
+  if (!origin) return null;
+  if (isLocalhostOrigin(origin)) return origin;
+  // Dev echo: reflect any origin so LAN testing works without ceremony.
+  return origin;
+}
+
+/** Split a comma-separated ALLOWED_ORIGINS value into a clean list. */
+function parseAllowedOrigins(raw: unknown): string[] {
+  if (typeof raw !== 'string' || !raw.trim()) return [];
+  return raw
+    .split(',')
+    .map((s) => s.trim().replace(/\/+$/, '')) // tolerate trailing slashes
+    .filter(Boolean);
+}
+
+/** True for http(s)://localhost or 127.0.0.1 (any port) — the dev allowlist. */
+function isLocalhostOrigin(origin: string): boolean {
+  try {
+    const u = new URL(origin);
+    return u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '[::1]';
+  } catch {
+    return false;
+  }
+}
+
+/** Build the CORS header set for a given (already-resolved) allowed origin. */
+function corsHeaders(allowOrigin: string | null): Record<string, string> {
+  const headers: Record<string, string> = { ...CORS_STATIC_HEADERS };
+  if (allowOrigin) headers['Access-Control-Allow-Origin'] = allowOrigin;
+  return headers;
+}
+
 /** Build a JSON Response with CORS headers and the given status. */
-function json(body: unknown, status = 200): Response {
+function json(body: unknown, status: number, allowOrigin: string | null): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+    headers: { 'Content-Type': 'application/json', ...corsHeaders(allowOrigin) },
   });
 }
 
@@ -54,30 +117,35 @@ export default class LobbyServer implements Party.Server {
   constructor(readonly room: Party.Room) {}
 
   async onRequest(req: Party.Request): Promise<Response> {
-    // Preflight: answer immediately with the CORS allowlist.
+    // Decide the allowed origin once per request from the deploy's allowlist.
+    const allowOrigin = resolveAllowedOrigin(req.headers.get('Origin'), this.room.env);
+
+    // Preflight: answer immediately with the resolved CORS headers. We still
+    // 204 even when the origin isn't allowed — we just omit ACAO, so the
+    // browser's preflight check fails cleanly without leaking allowlist shape.
     if (req.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: CORS_HEADERS });
+      return new Response(null, { status: 204, headers: corsHeaders(allowOrigin) });
     }
 
     // Per-IP rate limit.
     const ip = clientIp(req);
     if (!this.limiter.check(ip, LOBBY_RATE)) {
-      return json({ error: 'rate-limited' }, 429);
+      return json({ error: 'rate-limited' }, 429, allowOrigin);
     }
     // Lazy GC of stale limiter keys so memory stays bounded.
     this.limiter.prune();
 
     if (req.method === 'POST') {
-      return this.handleCreate(req);
+      return this.handleCreate(req, allowOrigin);
     }
     if (req.method === 'GET') {
-      return this.handleResolve(req);
+      return this.handleResolve(req, allowOrigin);
     }
-    return json({ error: 'method-not-allowed' }, 405);
+    return json({ error: 'method-not-allowed' }, 405, allowOrigin);
   }
 
   /** POST { action: 'create' } → allocate a fresh room id + unique join code. */
-  private async handleCreate(req: Party.Request): Promise<Response> {
+  private async handleCreate(req: Party.Request, allowOrigin: string | null): Promise<Response> {
     let action: unknown;
     try {
       const body = (await req.json()) as { action?: unknown };
@@ -86,7 +154,7 @@ export default class LobbyServer implements Party.Server {
       action = undefined;
     }
     if (action !== 'create') {
-      return json({ error: 'invalid-message' }, 400);
+      return json({ error: 'invalid-message' }, 400, allowOrigin);
     }
 
     const now = Date.now();
@@ -106,30 +174,30 @@ export default class LobbyServer implements Party.Server {
     }
     if (!joinCode) {
       // Astronomically unlikely with our wordlist, but fail loud rather than loop forever.
-      return json({ error: 'room-not-found' }, 503);
+      return json({ error: 'room-not-found' }, 503, allowOrigin);
     }
 
     const record: CodeRecord = { roomId, createdAt: now };
     await this.room.storage.put(joinCode, record);
-    return json({ roomId, joinCode });
+    return json({ roomId, joinCode }, 200, allowOrigin);
   }
 
   /** GET ?code=MOSS-420 → { roomId } or 404. */
-  private async handleResolve(req: Party.Request): Promise<Response> {
+  private async handleResolve(req: Party.Request, allowOrigin: string | null): Promise<Response> {
     const url = new URL(req.url);
     const raw = url.searchParams.get('code') ?? '';
     const code = normalizeJoinCode(raw);
     if (!code) {
-      return json({ error: 'room-not-found' }, 404);
+      return json({ error: 'room-not-found' }, 404, allowOrigin);
     }
 
     const now = Date.now();
     const record = await this.room.storage.get<CodeRecord>(code);
     if (!record || now - record.createdAt > PURGE_AFTER_MS) {
       if (record) await this.room.storage.delete(code);
-      return json({ error: 'room-not-found' }, 404);
+      return json({ error: 'room-not-found' }, 404, allowOrigin);
     }
-    return json({ roomId: record.roomId });
+    return json({ roomId: record.roomId }, 200, allowOrigin);
   }
 
   /** Drop any stored mappings older than 24h. */

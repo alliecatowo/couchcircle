@@ -258,12 +258,38 @@ export class RoomEngine {
     }
 
     this.conns.set(sender.id, identity.id);
+
+    // The host coming back to a controller-less couch reclaims the remote. While
+    // the host was away the remote may have been handed off and then orphaned
+    // (the last connected controller left → controllerId undefined, or it points
+    // at a participant who has since been removed). Rather than leave the couch
+    // stuck with nobody able to drive, the remote finds its way home.
+    this.maybeRestoreRemoteToHost(identity.id);
+
     this.touch();
 
     // Reply to the joiner specifically; broadcast to everyone else.
     this.reply(sender, { type: 'joined', selfId: identity.id, state, serverNow: Date.now() });
     this.broadcastState(sender.id);
     this.schedulePersist();
+  }
+
+  /**
+   * If `pid` is the host and the remote is currently orphaned — `controllerId`
+   * is undefined or points at a participant who no longer exists — hand the
+   * remote back to the host. No-op otherwise (a live controller keeps it; the
+   * §7 "last controller leaves" behavior of leaving controllerId as-is is
+   * preserved until the host actually returns).
+   */
+  private maybeRestoreRemoteToHost(pid: string): void {
+    const state = this.state!;
+    if (state.hostId !== pid) return;
+    const current = state.remote.controllerId;
+    const orphaned = !current || !state.participants[current];
+    if (!orphaned) return;
+    state.remote.controllerId = pid;
+    state.remote.pendingRequests = state.remote.pendingRequests.filter((id) => id !== pid);
+    this.pushEvent('remote', `📺 the remote found its way back to ${this.name(pid)}`, pid, '📺');
   }
 
   private initRoom(identity: IdentitySnapshot, create: CreateOptions, now: number): void {
@@ -339,6 +365,9 @@ export class RoomEngine {
         return;
 
       case 'presence:update':
+        // Mutates state + triggers a broadcast, so it shares the 'action'
+        // budget (vibe/name/avatar flips are user-paced, never high-frequency).
+        if (!this.rateOk(sender, 'action')) return this.rateLimited(sender);
         this.handlePresence(msg, pid);
         break;
       case 'sesh:status':
@@ -520,9 +549,11 @@ export class RoomEngine {
 
       // ---- screen share -------------------------------------------------
       case 'screen:start':
+        if (!this.rateOk(sender, 'action')) return this.rateLimited(sender);
         if (!this.handleScreenStart(pid)) return;
         break;
       case 'screen:stop':
+        if (!this.rateOk(sender, 'action')) return this.rateLimited(sender);
         if (!this.handleScreenStop(pid)) return;
         break;
 
@@ -1402,11 +1433,23 @@ export class RoomEngine {
 // Free helpers (pure)
 // ---------------------------------------------------------------------------
 
-/** Authoritative media position (seconds) at time `t` (ms). */
+/**
+ * Authoritative media position (seconds) at time `t` (ms).
+ *
+ * When the media `duration` is known we clamp the projected position to it: a
+ * controller-less room (nobody sending heartbeats / `media:ended`) would
+ * otherwise tick past the end forever, so the scrubber and any late joiner's
+ * pre-seek would land beyond the real end of the clip. Live/seekless media has
+ * no meaningful duration, so the clamp is a no-op there.
+ */
 function authoritativePosition(m: MediaState, t: number): number {
   if (m.status !== 'playing') return m.position;
   const elapsed = Math.max(0, t - m.updatedAtServerMs) / 1000;
-  return m.position + elapsed * m.playbackRate;
+  const projected = m.position + elapsed * m.playbackRate;
+  if (typeof m.duration === 'number' && m.duration > 0 && !m.isLive) {
+    return Math.min(projected, m.duration);
+  }
+  return projected;
 }
 
 /** Decode a binary frame to UTF-8 text; null on failure. */

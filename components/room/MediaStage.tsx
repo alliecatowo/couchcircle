@@ -112,14 +112,14 @@ function IdleScreen({
               </Button>
             ))}
           </div>
-          <p className="font-body text-xs text-cream-500">
+          <p className="font-body text-xs text-cream-400">
             we&apos;ll roll it the second it lands in the queue
           </p>
         </div>
       )}
 
       {!canControl && (
-        <p className="relative z-10 font-body text-xs text-cream-500">
+        <p className="relative z-10 font-body text-xs text-cream-400">
           waiting on whoever has the remote 📺
         </p>
       )}
@@ -346,9 +346,23 @@ export function MediaStage() {
         'border border-couch-700 shadow-[var(--shadow-couch)]',
       )}
     >
-      {/* soft ember lamp-glow radial in the upper-left corner */}
+      {/* the lamp: a soft ember glow pooling in from the upper-left corner.
+          Kept strong enough (and animated via flicker) to read as a light
+          source on the wall even when the TV picture fills most of the frame. */}
       <div
-        className="pointer-events-none absolute -left-16 -top-20 z-0 h-72 w-72 rounded-full bg-[radial-gradient(circle,rgba(240,139,52,0.20),transparent_65%)] blur-2xl"
+        className="animate-flicker pointer-events-none absolute -left-16 -top-20 z-0 h-72 w-72 rounded-full bg-[radial-gradient(circle,rgba(240,139,52,0.22),transparent_65%)] blur-2xl"
+        aria-hidden
+      />
+      {/* a whisper of haze drifting in from the opposite corner — seasoning, not
+          a panel — so the wall has depth instead of going flat behind the set */}
+      <div
+        className="pointer-events-none absolute -bottom-24 -right-16 z-0 h-72 w-72 rounded-full bg-[radial-gradient(circle,rgba(106,82,128,0.12),transparent_68%)] blur-2xl"
+        aria-hidden
+      />
+      {/* faint top vignette so the bezel sits in a lit corner, not floating on a
+          flat field — keeps the wall reading even with a bright picture playing */}
+      <div
+        className="pointer-events-none absolute inset-0 z-0 bg-[radial-gradient(120%_90%_at_50%_-15%,rgba(240,139,52,0.06),transparent_55%)]"
         aria-hidden
       />
       {/* faint baseboard line along the bottom of the wall */}
@@ -368,9 +382,11 @@ export function MediaStage() {
         <div
           className={cn(
             'tv-glow relative aspect-video max-h-full w-full max-w-full overflow-hidden rounded-2xl',
-            // the bezel
-            'bg-couch-950 p-1 ring-1 ring-couch-650',
-            'shadow-[0_24px_60px_-18px_rgba(0,0,0,0.85)]',
+            // the bezel: a warm hairline ring (DESIGN edge token) + the lifted
+            // shadow token so the set reads as a physical object on the wall,
+            // consistent across every adapter.
+            'bg-couch-950 p-1.5 ring-1 ring-couch-650',
+            'shadow-[var(--shadow-lifted)]',
           )}
         >
           {/* ambient glow pooling behind the set */}
@@ -379,10 +395,10 @@ export function MediaStage() {
             aria-hidden
           />
 
-          {/* the picture — fills the bezel inside its p-1 frame (inset-1 matches
-              the bezel padding so the warm ring stays visible); slight scale
-              crop hides the YT branding row edges */}
-          <div className="absolute inset-1 overflow-hidden rounded-xl bg-couch-950">
+          {/* the picture — fills the bezel inside its p-1.5 frame (inset-1.5
+              matches the bezel padding so the warm ring stays visible); slight
+              scale crop hides the YT branding row edges */}
+          <div className="absolute inset-1.5 overflow-hidden rounded-xl bg-couch-950">
             <div className="absolute inset-0 z-0 scale-[1.01]">
               {engine && showPlayer && currentItem ? (
                 <StagePlayer engine={engine} item={currentItem} adapter={adapter} />

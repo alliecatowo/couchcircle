@@ -175,7 +175,7 @@ export function ParticipantAvatar({ participant, size = 'md' }: ParticipantAvata
         isSelf && 'cursor-pointer',
       )}
       style={{ width: pxSize + 24 }}
-      title={isSelf ? 'click to set your status' : participant.name}
+      title={isSelf ? 'click to change your vibe' : participant.name}
     >
       {/* Chat speech bubble — fades out automatically */}
       <div className="h-8 flex items-end justify-center">

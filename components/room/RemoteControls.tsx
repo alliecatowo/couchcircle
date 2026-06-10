@@ -411,19 +411,18 @@ export function RemoteControls() {
         {/* Controller chip — styled as a little badge */}
         <div
           className={cn(
-            'inline-flex max-w-[180px] items-center gap-1.5 truncate rounded-full px-3 py-1 text-xs font-semibold',
+            'inline-flex max-w-[200px] items-center gap-1.5 truncate rounded-full px-3 py-1 text-xs font-semibold',
             isController
               ? 'border border-ember-600/40 bg-ember-950/60 text-ember-300'
               : 'border border-couch-700 bg-couch-850 text-cream-400',
           )}
         >
-          <span className="shrink-0">{isController ? '🎮' : '📺'}</span>
           <span className="truncate">
             {isController
-              ? "you've got the remote"
+              ? '🎮 you\'ve got the remote'
               : controllerParticipant
-                ? `${controllerParticipant.name} has it`
-                : 'no one has the remote'}
+                ? `📺 ${controllerParticipant.name} has it`
+                : '📺 up for grabs'}
           </span>
         </div>
 
@@ -439,11 +438,11 @@ export function RemoteControls() {
                   tip="host-only room — only the host drives"
                   className="rounded-full text-xs"
                 >
-                  request remote
+                  ask for the remote ✋
                 </DisabledTooltipButton>
               ) : selfHasRequested ? (
                 <span className="inline-flex items-center rounded-full border border-couch-700 bg-couch-850 px-3 py-1 text-xs text-cream-400">
-                  requested ✋
+                  asked ✋
                 </span>
               ) : (
                 <Button
@@ -452,7 +451,7 @@ export function RemoteControls() {
                   onClick={handleRequestRemote}
                   className="rounded-full text-xs"
                 >
-                  request remote
+                  ask for the remote ✋
                 </Button>
               )}
             </>
@@ -496,7 +495,7 @@ export function RemoteControls() {
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button size="sm" variant="outline" className="gap-1 rounded-full text-xs">
-                      pass remote
+                      pass the remote
                       <ChevronDown className="size-3" />
                     </Button>
                   </DropdownMenuTrigger>
@@ -530,14 +529,14 @@ export function RemoteControls() {
                   className="hidden rounded-full text-xs sm:inline-flex"
                   onClick={() => send({ type: 'ready:start' })}
                 >
-                  everyone ready? ✅
+                  everyone ready?
                 </Button>
               </TooltipTrigger>
               <TooltipContent>rally the couch</TooltipContent>
             </Tooltip>
           )}
 
-          {/* Host (not controller): "take it back" */}
+          {/* Host (not controller): "snag it back" */}
           {isHost && !isController && controllerId && (
             <Button
               size="sm"
@@ -545,7 +544,7 @@ export function RemoteControls() {
               className="rounded-full text-xs text-cream-400 hover:text-cream-200"
               onClick={handleRevokeRemote}
             >
-              take it back
+              snag it back
             </Button>
           )}
         </div>
@@ -597,7 +596,7 @@ export function RemoteControls() {
               <AlertOctagon className="size-4" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="top">PAUSE, I&apos;M DYING 🚨</TooltipContent>
+          <TooltipContent side="top">pause, i&apos;m dying 🚨</TooltipContent>
         </Tooltip>
       </div>
     </div>

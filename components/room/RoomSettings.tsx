@@ -179,6 +179,9 @@ function RoomSettingsContent({
         </DialogHeader>
 
         <div className="space-y-5">
+          {/* ── the room ─────────────────────────────────────────── */}
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-cream-400/60">the room</p>
+
           {/* Room name */}
           <div className="space-y-2">
             <Label htmlFor="room-name">room name</Label>
@@ -200,10 +203,15 @@ function RoomSettingsContent({
             )}
           </div>
 
-          {/* Remote mode selector */}
+          <Separator />
+
+          {/* ── the remote ───────────────────────────────────────── */}
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-cream-400/60">the remote</p>
+
+          {/* who can drive */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label>remote mode</Label>
+              <Label>who can drive</Label>
               {!isHost && (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -220,8 +228,8 @@ function RoomSettingsContent({
             <SegmentedControl
               options={[
                 { value: 'host-only', label: 'host only' },
-                { value: 'request', label: 'ask to control' },
-                { value: 'chaos', label: 'chaos mode 🐒' },
+                { value: 'request', label: 'ask first' },
+                { value: 'chaos', label: 'chaos 🐒' },
               ] satisfies Array<{ value: RemoteMode; label: string }>}
               value={remote.mode}
               onChange={(val) => handleRemoteMode(val)}
@@ -229,12 +237,12 @@ function RoomSettingsContent({
             />
           </div>
 
-          {/* Guests can add to queue */}
+          {/* guests can queue stuff */}
           <div className="flex items-center justify-between">
             <div>
-              <Label className="mb-0">guests can add to queue</Label>
+              <Label className="mb-0">guests can queue stuff</Label>
               <p className="text-xs text-cream-400">
-                {isHost ? 'who can queue up media' : 'current setting'}
+                {isHost ? 'let the crew add to up next' : 'current setting'}
               </p>
             </div>
             {isHost ? (
@@ -259,10 +267,10 @@ function RoomSettingsContent({
             )}
           </div>
 
-          {/* Rotation auto-advance */}
+          {/* auto-pass the rotation */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label>rotation auto-advance</Label>
+              <Label>auto-pass the rotation</Label>
               {!isHost && (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -278,7 +286,7 @@ function RoomSettingsContent({
             </div>
             <SegmentedControl
               options={[
-                { value: null, label: 'off' },
+                { value: null, label: 'manual' },
                 { value: 15, label: '15s' },
                 { value: 30, label: '30s' },
                 { value: 60, label: '60s' },
@@ -291,11 +299,14 @@ function RoomSettingsContent({
 
           <Separator />
 
+          {/* ── share ────────────────────────────────────────────── */}
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-cream-400/60">share</p>
+
           {/* Room code & invite link */}
           <div className="space-y-2">
-            <Label>invite link</Label>
+            <Label>copy invite</Label>
             <div className="flex gap-2">
-              <Badge variant="outline" className="flex-1 justify-center">
+              <Badge variant="outline" className="flex-1 justify-center font-mono tracking-widest">
                 {state.joinCode}
               </Badge>
               <Button

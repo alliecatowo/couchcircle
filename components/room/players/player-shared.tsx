@@ -37,7 +37,7 @@ export function MediaErrorPanel({ message, itemId }: { message: string; itemId: 
           skip it
         </Button>
       ) : (
-        <p className="font-body text-xs text-cream-500">
+        <p className="font-body text-xs text-cream-400">
           ask whoever has the remote to skip it
         </p>
       )}

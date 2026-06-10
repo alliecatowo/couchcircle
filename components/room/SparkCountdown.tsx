@@ -63,7 +63,12 @@ export function SparkCountdown() {
       {show && (
         <motion.div
           key="spark-overlay"
-          className="pointer-events-none absolute inset-0 z-30 flex flex-col items-center justify-center"
+          // a CSS container so the number/burst size against THIS box (the
+          // bezel interior, since we're absolute inset-0 inside the picture) via
+          // cqmin units — that keeps the count centered in the bezel and never
+          // clipped against the picture's overflow-hidden on short windows,
+          // where a vh-based size would overshoot a small letterboxed TV.
+          className="pointer-events-none absolute inset-0 z-30 flex flex-col items-center justify-center [container-type:size]"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -88,7 +93,9 @@ export function SparkCountdown() {
             <AnimatePresence mode="popLayout">
               <motion.div
                 key={remaining}
-                className="font-display text-[clamp(5rem,22vh,11rem)] font-semibold leading-none text-ember-300 drop-shadow-[0_0_28px_rgba(240,139,52,0.6)]"
+                // sized off the bezel (cqmin), capped so even the 1.5× exit
+                // scale stays inside the picture's overflow-hidden.
+                className="font-display text-[clamp(3.5rem,38cqmin,11rem)] font-semibold leading-none text-ember-300 drop-shadow-[0_0_28px_rgba(240,139,52,0.6)]"
                 initial={{ scale: 0.55, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 1.5, opacity: 0 }}
@@ -100,7 +107,11 @@ export function SparkCountdown() {
           ) : (
             <motion.div
               key="blaze"
-              className="font-display text-[clamp(2.75rem,10vh,5.5rem)] font-bold uppercase tracking-tight text-ember-300 drop-shadow-[0_0_40px_rgba(240,139,52,0.8)]"
+              // "blaze it 🔥" is wider than a single digit, so size it smaller
+              // off the bezel (cqmin) and keep it on one line; even the 1.2×
+              // peak of the burst stays inside the picture frame. px-4 gives the
+              // glyphs breathing room so the burst never clips at the edges.
+              className="whitespace-nowrap px-4 text-center font-display text-[clamp(2rem,14cqmin,5.5rem)] font-bold uppercase tracking-tight text-ember-300 drop-shadow-[0_0_40px_rgba(240,139,52,0.8)]"
               initial={{ scale: 0.4, opacity: 0 }}
               animate={{ scale: [0.4, 1.2, 1], opacity: 1 }}
               transition={{ duration: 0.6, ease: [0.34, 1.56, 0.64, 1] }}

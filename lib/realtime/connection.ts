@@ -16,9 +16,25 @@ import type { RoomConnection } from '@/lib/realtime/types';
 // Host / URL helpers
 // ---------------------------------------------------------------------------
 
-/** Returns the PartyKit host from env or the default localhost address. */
+/** The deployed PartyKit host, used automatically on non-localhost origins. */
+const PRODUCTION_PARTYKIT_HOST = 'couchcircle.alliecatowo.partykit.dev';
+
+/**
+ * Returns the PartyKit host: explicit env wins; otherwise localhost dev
+ * defaults to the local party server and any deployed origin defaults to the
+ * production PartyKit deployment (so the frontend deploy needs no env vars).
+ */
 export function partyHost(): string {
-  return process.env.NEXT_PUBLIC_PARTYKIT_HOST ?? DEFAULT_PARTYKIT_HOST;
+  if (process.env.NEXT_PUBLIC_PARTYKIT_HOST) {
+    return process.env.NEXT_PUBLIC_PARTYKIT_HOST;
+  }
+  if (
+    typeof window !== 'undefined' &&
+    !['localhost', '127.0.0.1'].includes(window.location.hostname)
+  ) {
+    return PRODUCTION_PARTYKIT_HOST;
+  }
+  return DEFAULT_PARTYKIT_HOST;
 }
 
 /**

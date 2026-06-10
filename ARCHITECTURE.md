@@ -1,5 +1,10 @@
 # CouchCircle — Architecture & Contracts (v1)
 
+> **Product concepts, vocabulary, and copy rules are governed by CONCEPTS.md.**
+> This file governs the *technical* contracts: module shapes, message protocols,
+> data flows, and runtime behaviors. When a technical detail and CONCEPTS.md
+> disagree, CONCEPTS.md wins on *what*; this file wins on *how*.
+
 CouchCircle is a cozy real-time browser watch-party app: one room, one shared queue, one
 shared remote, one authoritative sync protocol, multiple media adapters (YouTube, direct
 URL, P2P screen share), plus an explicit "Sesh Mode" social layer (blunt rotation, spark
@@ -53,6 +58,7 @@ Importing from other modules per the contracts below is expected and fine.
 | components/room/SeshControls.tsx, RotationPanel.tsx, ReadyCheck.tsx | sesh |
 | components/room/RoomSettings.tsx | settings |
 | README.md | readme |
+| SECURITY.md | security |
 | scripts/smoke.mjs | smoke |
 
 ## 3. Conventions (all agents)
@@ -72,6 +78,8 @@ Importing from other modules per the contracts below is expected and fine.
 - Style with Tailwind utilities + tokens from DESIGN.md. Match the cozy late-night
   living-room vibe. No sterile SaaS, no blue/purple startup gradients.
 - Keep files under ~500 lines; split sensibly within your owned set if needed.
+- **[sync] breadcrumbs and `window.__couchSync` diagnostics** — keep these intact wherever
+  you encounter them. See §9 dev diagnostics note.
 
 ## 4. Shared protocol — `shared/protocol.ts`
 
@@ -351,6 +359,12 @@ if < 6h old (gives dev-reload + restart resilience).
 - Reply `joined { selfId, state, serverNow }` to the joiner; broadcast `room:state` to
   the rest; append a `join` event ("Maya flopped onto the couch").
 
+**`room-not-found` mid-join:** if a client resolves the lobby successfully but `room:join`
+returns `error room-not-found` while `joinPhase === 'joining'` (room lobby entry exists
+but the room is still uninitialized — e.g. creator hasn't sent `room:join` yet), the
+context maps this to `joinPhase: 'not-found'` so the gate renders the "this room dissolved
+into the haze" screen rather than spinning forever.
+
 **Permission matrix** (single helper, mirrored by `canControl` in protocol):
 - media commands (`media:*`, `queue:play`, `queue:move`): controller; or anyone in
   `chaos` mode; the host can always act.
@@ -467,6 +481,12 @@ export interface RoomContextValue {
   joinPhase: JoinPhase;
   joinError: string | null;
   lastError: { code: ErrorCode; message: string; ts: number } | null;
+  /**
+   * true once the socket is open and room:join can actually be sent. Resets to
+   * false while disconnected/reconnecting; rises again on the next open event.
+   * JoinGate gates its submit button on this.
+   */
+  joinReady: boolean;
   send(msg: ClientMessage): void;
   join(opts: { identity: IdentitySnapshot; password?: string }): void;
   serverNow(): number;
@@ -497,12 +517,16 @@ export interface RoomContextValue {
   phase `gate`. `join()` sends `room:join` (with `create` payload if a pending-create
   exists — see below). On `joined`: store selfId, state, phase `joined`. On `room:state`:
   replace state. On `error`: map `wrong-password`/`password-required` → phase
-  `wrong-password` (back to gate w/ message), `room-full` → `room-full`; others → set
+  `wrong-password` (back to gate w/ message), `room-full` → `room-full`;
+  `room-not-found` during `joining` → `not-found` (see §7 mid-join note); others → set
   `lastError` (auto-clear after ~6s).
 - **Pending create:** sessionStorage key `couchcircle:pending-create:{CODE}` holding
   `{ roomId, roomName?, password?, seedDemo? }`, written by the landing page. On join,
   if present, include `create: { joinCode: code, ...pending }` and the creator's chosen
   password; remove the key after `joined`.
+- **joinReady flag:** set `true` when the socket fires `open`; reset `false` on `close`.
+  If `join()` is called before the socket is open, the opts are queued in a
+  `pendingJoinRef` and fired when the next `open` event arrives.
 - Reconnect: partysocket auto-reconnects; on `open` after a previous `joined`, re-send
   `room:join` with the same identity (+password from memory). Track
   `connectionStatus` from socket events ('reconnecting' on close after first open).
@@ -521,6 +545,14 @@ export interface SyncStatusSnapshot {
   driftMs: number;              // last measured local drift (0 when n/a)
   isLive: boolean; canSeek: boolean; canPause: boolean;
   mediaStatus: MediaStatus;
+  /** Local-only volume 0..1 (not synced to room). */
+  localVolume: number;
+  /**
+   * True when the adapter could only start via MUTED autoplay (browser blocked
+   * audible autoplay). The UI surfaces a "tap to unmute" pill that calls
+   * unmuteAndSync(). Cleared once the user unmutes.
+   */
+  needsUnmute: boolean;
 }
 
 export class SyncEngine {
@@ -532,13 +564,23 @@ export class SyncEngine {
   setAdapter(adapter: MediaAdapter | null): void;
   /** call on EVERY room:state with state.media */
   applyMediaState(media: MediaState): void;
-  /** user-gesture resume after autoplay block */
-  resumePlayback(): void;
+  /** user-gesture resume after autoplay block (non-YouTube players) */
+  resumePlayback(): Promise<void>;
+  /** restore audible playback after muted-autoplay fallback; re-syncs position */
+  unmuteAndSync(): void;
   destroy(): void;
 }
 
-/** subscribe UI to the engine's snapshot (useSyncExternalStore over a module-level store
-    that the active engine instance publishes to ~4x/sec) */
+/** Set the local (non-synced) volume for the active adapter; remembered across
+    adapter swaps. Called by RemoteControls. */
+export function setLocalVolume(v01: number): void;
+
+/** Module-level proxy: calls the active engine's unmuteAndSync(). Called by
+    the MediaStage "tap to unmute" pill without holding the engine instance. */
+export function unmuteAndSync(): void;
+
+/** subscribe UI to the engine's snapshot (useSyncExternalStore over a module-level
+    store that the active engine instance publishes to ~4×/sec) */
 export function useSyncStatus(): SyncStatusSnapshot;
 ```
 
@@ -551,14 +593,63 @@ Behavior:
   Apply rate changes. If `queueItemId` changed, the **MediaStage** handles load (engine
   only syncs transport).
 - Heartbeat-only updates (same seq) just refresh the authoritative anchor.
+- **Heartbeat adoption is gated:** the controller sends `media:heartbeat` every
+  HEARTBEAT_MS; the server adopts the reported position only when the gap exceeds 0.4s.
+  On the client, the heartbeat is sent when the engine tick fires AND `isController()`
+  returns true, regardless of whether the room is currently playing or paused.
+- **Paused-state enforcement:** every tick (controller and viewer alike) checks whether
+  the authoritative status is `'paused'` and whether the local adapter is still playing.
+  If so, `pause()` is called; if the adapter has crept more than 1.0s from the anchor
+  position a corrective seek fires (with a 1.5s cooldown so stubborn embeds aren't
+  re-sought on every tick).
 - 1s interval: controller → send `media:heartbeat` every HEARTBEAT_MS with adapter time +
   status. Non-controller while playing → drift = adapterTime − authoritative:
   `<DRIFT_SOFT_MS` ignore (health `synced`); soft band → temporarily set adapter rate to
   `rate ± RATE_NUDGE` until caught up (health `drift`); `≥DRIFT_HARD_MS` → hard seek
   (health `resyncing`, decays back to `synced` ~1.5s later).
 - Adapter status `loading` → `buffering`; `isLive` → `live`; play() rejection (autoplay
-  policy) → `blocked` until `resumePlayback()` succeeds.
+  policy only — `DOMException 'NotAllowedError'`) → `blocked` until `resumePlayback()`
+  succeeds. Any non-autoplay rejection is NOT treated as `blocked` — the adapter's own
+  `onError` surfaces it instead, so a dead source never shows the "tap to sync up"
+  curtain.
+- **Muted-autoplay fallback:** both `YouTubeAdapter` and `DirectUrlAdapter` try audible
+  play first, then fall back to muted if blocked. On success the adapter sets its
+  internal `autoplayMuted` flag; the engine reads `wasAutoplayMuted()` and sets
+  `needsUnmute: true` in the snapshot. `unmuteAndSync()` calls `adapter.unmute()`,
+  clears the flag, and re-seeks to the authoritative position.
+- **Dead-adapter guard:** `YouTubeAdapter` and `DirectUrlAdapter` expose `isDestroyed():
+  boolean` (not part of the shared interface). The engine probes for it structurally on
+  every `setAdapter` call and in the `_liveAdapter()` accessor — a destroyed adapter is
+  silently dropped rather than receiving transport calls that would silently no-op. This
+  prevents the "tap to sync up" curtain from getting permanently wedged by a stale
+  adapter left behind by React dev-mode's double-mount.
 - All timers cleaned in `destroy()`.
+
+**YouTube autoplay strategy** (for YouTube-specific blocking):
+1. **Poll-detect** — call `playVideo()`, then poll `getPlayerState()` for up to ~1.5s.
+   If state reaches PLAYING or BUFFERING → audible play succeeded.
+2. **Mute-confirm** — if the audible budget expires, call `mute()`, then poll
+   `isMuted()` for up to ~0.8s before issuing `playVideo()` (mute is a postMessage
+   fire-and-forget; issuing playback before it applies risks another blocked attempt).
+3. **Muted fallback** — once mute is confirmed, call `playVideo()` again; poll for
+   ~1.2s. If PLAYING/BUFFERING → resolve and set `wasAutoplayMuted: true` so the
+   engine exposes `needsUnmute`.
+4. **Blocked passthrough** — if even muted play fails, reject with
+   `DOMException 'NotAllowedError'` so the engine marks health `'blocked'`.
+   On the YouTube adapter the click-shield goes `pointer-events-none` so the tap
+   reaches the embed's own ▶ button — the only gesture YouTube will honour. A
+   non-blocking banner ("hit the ▶ to sync up") is shown instead of the full curtain.
+
+**Dev diagnostics (keep intact):**
+- `window.__couchSync.state()` — available in the browser console (dev and prod); returns
+  a live `CouchSyncDiag` snapshot of the active engine: `hasEngine`, `hasAdapter`,
+  `adapterType`, `adapterStatus`, `adapterDestroyed`, `blocked`, `needsUnmute`,
+  `lastSeq`, `anchorStatus`, `health`, etc. Reads the raw `_adapter` field so a probe
+  never has the side effect of dropping a destroyed adapter.
+- `[sync]` `console.debug` breadcrumbs — scattered through `SyncEngine`, `YouTubePlayer`,
+  and `DirectUrlPlayer` (and mirrored in `room-context.tsx` as `[couchcircle:*]`). Keep
+  them. They are the primary signal when debugging a wedged curtain or a mis-timed
+  scheduled play.
 
 ## 10. Media adapters — `lib/media/`
 
@@ -589,9 +680,25 @@ export interface MediaAdapter {
   canSeek(): boolean; canPause(): boolean; isLive(): boolean;
   /** local-only volume 0..1 (not synced) */
   setVolume?(v: number): void; getVolume?(): number;
+  /**
+   * True when the most recent successful play() fell back to MUTED autoplay.
+   * Stays true until unmute() is called. Optional: adapters without a muted-
+   * fallback path (e.g. screen share) may omit it.
+   */
+  wasAutoplayMuted?(): boolean;
+  /**
+   * Restore audible playback after a muted-autoplay fallback. Must be driven
+   * by a user gesture. Optional: only meaningful alongside wasAutoplayMuted().
+   */
+  unmute?(): void;
   destroy(): void;
 }
 ```
+
+**`isDestroyed(): boolean`** — NOT part of the `MediaAdapter` interface but implemented
+by `YouTubeAdapter` and `DirectUrlAdapter` as a cheap internal liveness check. The
+SyncEngine probes for it structurally (`(adapter as { isDestroyed?: () => boolean }).isDestroyed`)
+to drop torn-down adapters before issuing transport calls.
 
 ### YouTube — `lib/media/youtube.ts` + `lib/media/url-parse.ts` (yt-adapter task)
 
@@ -606,6 +713,9 @@ export interface MediaAdapter {
   `@types/youtube` (installed) for typing; `playerVars: { playsinline: 1, rel: 0, modestbranding: 1, disablekb: 1 }`.
   Map player states → AdapterMediaStatus; `onError` → friendly message ("This video can't
   be embedded — try another link" for 101/150). `destroy()` destroys player + clears container.
+  Implements `wasAutoplayMuted()`, `unmute()`, and `isDestroyed()` (see §9 and §10 notes above).
+  The ready promise rejects after 8s if `onReady` never fires (prevents a hung `play()`
+  wedging the autoplay curtain).
 
 ### Direct URL — `lib/media/direct-url.ts` (direct-adapter task)
 
@@ -617,6 +727,10 @@ export interface MediaAdapter {
   Error → friendly copy: "This link can't be played directly by your browser. Try a
   direct MP4/WebM/HLS link, or screen share instead." `play()` propagates the rejection
   (sync engine surfaces `blocked`).
+- Implements `wasAutoplayMuted()`, `unmute()`, and `isDestroyed()`.
+- Muted-autoplay fallback: audible `video.play()` first; on `NotAllowedError` set
+  `video.muted = true` and retry; if even muted play rejects, rethrow so the engine
+  enters the `blocked` path.
 
 ### Screen share — `lib/media/screen-share.ts` + `lib/webrtc/mesh.ts` (screenshare task)
 
@@ -662,12 +776,20 @@ exists). No upload UI beyond a disabled card (queue task renders it).
 
 ```ts
 export type LocalIdentity = IdentitySnapshot;     // re-export shape from protocol
-export function loadIdentity(): LocalIdentity | null;   // localStorage 'couchcircle:identity'; SSR-safe (null on server)
+export function loadIdentity(): LocalIdentity | null;   // SSR-safe (null on server)
 export function saveIdentity(identity: LocalIdentity): void;
 export function ensureIdentity(): LocalIdentity;  // load or create+save a random one
 export function randomName(): string;             // cozy two-parter: "Blanket Wizard", "Couch Cryptid", "Haze Gremlin"...
 export function randomIdentity(): LocalIdentity;  // nanoid() id, randomName, random avatar from AVATAR_IDS, random ACCENT_COLORS entry
 ```
+
+**Participant ID scoping:** the participant `id` is **TAB-scoped** via `sessionStorage`
+(key `couchcircle:tab-id`). sessionStorage survives reloads within a tab (so a refresh
+reattaches to the same participant seat), but differs between tabs — opening the room in
+two tabs yields two distinct crew members rather than one ghost with two connections.
+User preferences (name, avatar, accent) are persisted in `localStorage` (key
+`couchcircle:identity`). On load, identity prefs are read from localStorage but the `id`
+field is always replaced with the tab-scoped value.
 
 ## 12. UI component contracts
 
@@ -693,8 +815,9 @@ implementations before styling anything.
 - **`JoinGate`**: cozy full-screen porch: name input (prefilled from `ensureIdentity()`),
   avatar picker grid (AvatarSprite for all six + AVATAR_META labels), accent swatches,
   password field when `joinPhase === 'wrong-password'` or pending-create has none but
-  state demands it; big "slide onto the couch" button → `join()`; handles `not-found`
-  (link to `/` "this room dissolved into the haze"), `room-full`, `resolving` spinner vibe.
+  state demands it; big "slide onto the couch" button (gated on `joinReady`) → `join()`;
+  handles `not-found` (link to `/` "this room dissolved into the haze"), `room-full`,
+  `resolving` spinner vibe.
   Persists identity via `saveIdentity` on join.
 - **`ErrorBanner`**: `lastError` + `connectionStatus !== 'connected'` states ("reconnecting
   to the couch…"). Slides down from top; auto-dismiss when cleared.
@@ -702,15 +825,25 @@ implementations before styling anything.
   amber < 250, red otherwise).
 - **`MediaStage`** (media-stage): the shared TV. Owns ONE `SyncEngine` instance (created
   with context fns, destroyed on unmount) and renders the right player by
-  `state.media.adapter`: `'idle'` → cozy TV-off screen (flickering glow, "queue something
-  to start the night", quick-add sample buttons that send `queue:add` + `queue:play`);
-  `youtube|direct-url|screen-share` → the player components below. Overlays:
-  `SparkCountdown`, `ReactionLayer`, autoplay-`blocked` "tap to sync up" overlay
-  (→ `engine.resumePlayback()`), media error panel (friendly copy + "remove from queue"
-  when canControl). Players receive `{ engine, item }`:
-  - **`YouTubePlayer({ engine, item }: { engine: SyncEngine; item: QueueItem })`** —
-    container div, instantiate `YouTubeAdapter`, `adapter.load(item)`,
-    `engine.setAdapter(adapter)`, destroy on unmount/item change.
+  `state.media.adapter`. Adapter `'idle'` → cozy TV-off screen (flickering glow,
+  "queue something to start the night", quick-add sample buttons that send `queue:add`);
+  `youtube|direct-url|screen-share` → the player components below.
+
+  **The click-shield** — a transparent `<div>` sits ABOVE the embedded player surface and
+  BELOW the overlay stack (`z-20`). It eats every pointer event so viewers can't drive
+  YouTube's own play/scrubber and desync the room. Tapping it flashes a brief "use the
+  remote 📺" hint. When health is `'blocked'` on a YouTube player, the shield drops to
+  `pointer-events-none` (`ClickShieldGate`) so taps reach the embed's own ▶ — the only
+  gesture YouTube will honour.
+
+  **The unmute pill** — rendered above the shield when `SyncStatusSnapshot.needsUnmute`
+  is true; calls the module-level `unmuteAndSync()` on click.
+
+  Players receive `{ engine, item }` and are **keyed by `item.id`** in `StagePlayer` so
+  that a queue-item change causes a full remount rather than a prop update — this is
+  critical for clean adapter lifecycle (see §pitfalls below).
+  - **`YouTubePlayer({ engine, item })`** — container div, instantiate `YouTubeAdapter`,
+    `adapter.load(item)`, `engine.setAdapter(adapter)`, destroy on unmount/item change.
   - **`DirectUrlPlayer({ engine, item })`** — same with `<video>` + `DirectUrlAdapter`.
   - **`ScreenSharePlayer({ engine, item })`** — splits host (`state.media.sharerId === selfId`)
     vs viewer. Host: button "Start sharing your screen" → mesh.startSharing(), local
@@ -720,17 +853,32 @@ implementations before styling anything.
     "Best for small rooms — quality depends on the host's upload" copy
     (+ louder warning when participants > MESH_COMFORT_LIMIT). Permission denied →
     friendly error + `screen:stop`. Full mesh cleanup on unmount.
+
+  **Player effects: key on `item.id` (pitfalls)**
+  Player `useEffect`s depend on `[engine, item.id]` — NOT the full `item` object.
+  The room broadcasts a new object reference on every `room:state` (every heartbeat,
+  ~2.5s), which would retrigger a load effect on every tick. Depending on `item.id`
+  means the effect only re-runs when the *identity* of the playing item changes.
+  The adapter holds a ref (`itemRef.current`) to get the freshest metadata at load time.
+  The `StagePlayer` is also `key={item.id}` — a key change triggers a full unmount/remount
+  rather than an update, guaranteeing the old adapter is destroyed before the new one
+  starts. If you ever find a load cycling on heartbeats or a "tap to sync up" curtain that
+  can't be dismissed, check that the effect deps haven't accidentally regressed to the full
+  `item` object.
+
 - **`SyncIndicator`**: pill from `useSyncStatus()` health: Synced 🟢 / Slight drift 🟡 /
   Resyncing 🔄 / Buffering 🌀 / LIVE 🔴 / blocked ⚠️ "tap to sync".
 - **`SparkCountdown`**: when `sesh.sparkCountdownEndsAt` is in the future render a huge
   centered count (ceil((endsAt − serverNow())/1000)) with smoke/glow animation, then a
   brief "BLAZE IT 🔥" burst at 0. Ticks via rAF/250ms interval against `serverNow()`.
 - **`ReactionLayer`**: floats `reactions` bursts up over the stage (framer-motion).
-- **`ParticipantCircle`** (participants): the couch row — a stylized couch (CSS/SVG) with
-  `ParticipantAvatar`s seated along it (wrap to floor cushions beyond ~6). Diff
-  `state.events` to fire flourishes: join bounce, `pass-the-vibe` glow wave across seats,
-  rotation current-turn ring, ready ✅ badges during readyCheck, controller 📺 chip,
-  disconnected → translucent zZz.
+- **`ParticipantCircle`** (participants): the couch row — a stylized seating scene per
+  CONCEPTS §4 (fixed 12-seat map, furniture row + floor arc) with `ParticipantAvatar`s
+  seated by join order. Seat stickiness: participants keep seats on reconnect; when
+  someone leaves for good the seat opens and the next new joiner claims the lowest open
+  seat. Existing crew never move. Diff `state.events` to fire flourishes: join bounce,
+  `pass-the-vibe` glow wave across seats, rotation current-turn ring, ready ✅ badges
+  during readyCheck, controller 📺 chip, disconnected → translucent zZz.
 - **`ParticipantAvatar({ participant, size = 'md' }: { participant: Participant; size?: 'sm'|'md'|'lg' })`**:
   AvatarSprite + name plate + StatusBubble (STATUS_META emoji+label, animated on change);
   clicking YOUR OWN avatar opens **`StatusPicker`** (popover grid of all statuses →
@@ -756,13 +904,13 @@ implementations before styling anything.
 - **`RemoteControls`** (remote): bottom bar. Transport: play/pause (`media:play`/`media:pause`),
   scrubber bound to `useSyncStatus().positionSec/durationSec` (drag → `media:seek`;
   HIDDEN when `!canSeek`), time readout, rate menu 0.5–2× (`media:rate`), LOCAL volume
-  slider (adapter `setVolume` — note "your volume only"). Controller chip: "🎮 you have
-  the remote" or "{name} has the remote". Buttons: request remote (non-controller,
-  `remote:request`, disabled in host-only mode w/ tooltip), pass remote (controller →
-  dropdown of participants, `remote:pass`), grant/deny pending requests (controller sees
-  pendingRequests badges), emergency pause (anyone, red, `room:action emergency-pause`).
-  Renders `<SyncIndicator />`. Transport disabled (with cozy tooltip "ask for the
-  remote") when `!canControl`.
+  slider (calls module-level `setLocalVolume()` — note "your volume only"). Controller chip:
+  "🎮 you have the remote" or "{name} has the remote". Buttons: request remote
+  (non-controller, `remote:request`, disabled in host-only mode w/ tooltip), pass remote
+  (controller → dropdown of participants, `remote:pass`), grant/deny pending requests
+  (controller sees pendingRequests badges), emergency pause (anyone, red,
+  `room:action emergency-pause`). Renders `<SyncIndicator />`. Transport disabled (with
+  cozy tooltip "ask for the remote") when `!canControl`.
 - **`SeshControls`** (sesh): horizontal strip visible only when `sesh.enabled`:
   Join/Leave rotation, Start/Stop rotation (controller/host), Spark countdown
   (`sesh:countdown:start` SPARK_DEFAULT_SECONDS), Hit now, Pass (left/right split button),
@@ -776,7 +924,6 @@ implementations before styling anything.
   `media:play`) and cancel.
 - **`RoomSettings({ open, onClose })`** (settings): dialog; host-only editing (read-only
   view otherwise): room name (text), remote mode (host-only / request / chaos →
-  `settings:update`? NO — remote mode lives in RemoteState: send
   `settings:update { }`… **remote mode is changed via a dedicated control**: include a
   segmented control that sends `remote:revoke`-style? → Implementation: extend
   `settings:update` handling on the server: when `settings` includes
@@ -844,10 +991,14 @@ body classes, metadata (title "CouchCircle — watch together, actually together
 |---|---|
 | WS reconnecting / dropped | ErrorBanner + ConnectionHealth |
 | Room not found / expired | JoinGate `not-found` screen |
+| Room not found mid-join | JoinGate `not-found` screen (lobby resolved but room uninitialized) |
 | Wrong password | JoinGate inline error, field shake |
 | Room full | JoinGate state |
 | Media failed (CORS/format) | MediaStage error panel w/ friendly copy |
 | YouTube embed blocked | adapter onError → same panel |
+| YouTube autoplay blocked | BlockedBanner (non-blocking pill) + click-shield drops so tap reaches embed ▶ |
+| Direct-URL autoplay blocked | BlockedCurtain full overlay + resumePlayback() |
+| Muted autoplay (any adapter) | UnmutePill: "tap to unmute" + unmuteAndSync() |
 | Screen-share permission denied | ScreenSharePlayer inline + auto `screen:stop` |
 | WebRTC failed | per-peer chips + retry hint |
 | Host stopped sharing | server event + media→idle TV-off screen |

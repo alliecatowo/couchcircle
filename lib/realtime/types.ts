@@ -59,6 +59,12 @@ export interface RoomContextValue {
   joinPhase: JoinPhase;
   joinError: string | null;
   lastError: { code: ErrorCode; message: string; ts: number } | null;
+  /**
+   * true once the socket is open and room:join can actually be sent — gate
+   * the JoinGate submit on this. Resets to false while disconnected/reconnecting
+   * and returns to true only after the next `open` event fires.
+   */
+  joinReady: boolean;
   send(msg: ClientMessage): void;
   join(opts: { identity: IdentitySnapshot; password?: string }): void;
   serverNow(): number;

@@ -93,7 +93,7 @@ export function ReadyCheck() {
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="font-display text-sm font-semibold leading-tight text-cream-50">
-                    {allReady ? "everyone's ready!" : 'everyone ready?'}
+                    {allReady ? "everyone's ready" : 'everyone ready?'}
                     {/* n/total always on the same line so it's never clipped */}
                     <span className="ml-1.5 font-mono text-xs font-normal text-cream-400">
                       {readyCount}/{total} locked in
@@ -135,7 +135,7 @@ export function ReadyCheck() {
                   send({ type: 'ready:set', ready: !isSelfReady })
                 }
               >
-                {isSelfReady ? 'actually wait… ✋' : "i'm ready 🟢"}
+                {isSelfReady ? 'actually wait ✋' : 'locked in 🟢'}
               </Button>
 
               {/* Controller/host controls */}
@@ -155,7 +155,7 @@ export function ReadyCheck() {
                     className="text-cream-400"
                     onClick={() => send({ type: 'ready:cancel' })}
                   >
-                    cancel
+                    nevermind
                   </Button>
                 </div>
               )}

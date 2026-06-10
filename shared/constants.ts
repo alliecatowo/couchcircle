@@ -12,31 +12,31 @@ import type { AvatarId, ParticipantStatus } from '@/shared/protocol';
 // Timing & sync tunables
 // ---------------------------------------------------------------------------
 
-/** Play commands schedule this far in the future so everyone starts together. */
+/** Scheduled-start lead so everyone starts together (all clients get the cue before t=0). */
 export const PLAY_LEAD_MS = 450;
-/** How often the controller emits a `media:heartbeat`. */
+/** Controller truth cadence — how often the controller emits a `media:heartbeat`. */
 export const HEARTBEAT_MS = 2500;
 /** Client ↔ server ping cadence used to estimate the clock offset. */
 export const PING_INTERVAL_MS = 10_000;
-/** Drift below this (ms) is ignored — we're synced. */
+/** Imperceptible drift threshold — below this (ms) we're synced, ignore. */
 export const DRIFT_SOFT_MS = 150;
-/** Drift at or above this (ms) triggers a hard seek. */
+/** Annoying drift threshold — at or above this (ms) we hard-seek back into sync. */
 export const DRIFT_HARD_MS = 750;
-/** Gentle playback-rate delta used to nudge a drifting client back into sync. */
+/** Gentle catch-up rate delta — inaudible pitch change that nudges a drifting client. */
 export const RATE_NUDGE = 0.05;
-/** Hard cap on people in one room. */
+/** The seat map cap (§4 of CONCEPTS.md) — 12 seats, no overflow, no arbitrary number. */
 export const MAX_PARTICIPANTS = 12;
-/** Above this many viewers we warn that mesh screen-share quality may suffer. */
+/** P2P mesh quality cliff — warn above this many viewers that screen-share may degrade. */
 export const MESH_COMFORT_LIMIT = 5;
-/** Max chat messages retained in room state (oldest dropped). */
+/** A vibe, not an archive — max chat messages retained in room state (oldest dropped). */
 export const MAX_CHAT = 100;
-/** Max activity events retained in room state (oldest dropped). */
+/** A vibe, not an archive — max activity events retained in room state (oldest dropped). */
 export const MAX_EVENTS = 80;
-/** Grace window before a disconnected participant is removed. */
+/** Refresh ≠ leaving — grace window before a disconnected participant is removed. */
 export const DISCONNECT_GRACE_MS = 60_000;
-/** Default spark-countdown length in seconds. */
+/** Long enough to inhale, short enough to stay funny — default spark-countdown in seconds. */
 export const SPARK_DEFAULT_SECONDS = 5;
-/** How long a snack-run vote stays open. */
+/** A vote, not a meeting — how long a snack-run vote stays open. */
 export const SNACK_VOTE_WINDOW_MS = 30_000;
 /** Fallback PartyKit host when NEXT_PUBLIC_PARTYKIT_HOST is unset. */
 export const DEFAULT_PARTYKIT_HOST = '127.0.0.1:1999';

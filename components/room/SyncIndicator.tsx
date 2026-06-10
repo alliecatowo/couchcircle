@@ -4,9 +4,10 @@
  * SyncIndicator — the little sync-health pill (§12 MediaStage block).
  *
  * Reads the live {@link useSyncStatus} snapshot published by the active
- * {@link SyncEngine} and renders a cozy status pill: Synced 🟢, slight drift 🟡,
- * resyncing 🔄, buffering 🌀, LIVE (red live Badge), or blocked ⚠️. A Tooltip
- * exposes the measured drift in ms for the curious.
+ * {@link SyncEngine} and renders a cozy status pill. Labels are CONCEPTS §2
+ * canon: synced 🟢, drifting 🟡, resyncing 🔄, buffering 🌀, live (red live
+ * Badge), or "tap to sync" ⚠️ when autoplay is blocked. A Tooltip exposes the
+ * measured drift in ms for the curious.
  */
 
 import * as React from 'react';
@@ -34,7 +35,7 @@ function specFor(health: SyncHealth): PillSpec {
       };
     case 'drift':
       return {
-        label: 'slight drift',
+        label: 'drifting',
         glyph: '🟡',
         className: 'border-ember-600/40 bg-ember-950/40 text-ember-300',
       };
@@ -75,7 +76,7 @@ export function SyncIndicator() {
       <Tooltip>
         <TooltipTrigger asChild>
           <Badge variant="live" className="cursor-default">
-            🔴 LIVE
+            🔴 live
           </Badge>
         </TooltipTrigger>
         <TooltipContent>live stream — no rewind, we ride it together</TooltipContent>

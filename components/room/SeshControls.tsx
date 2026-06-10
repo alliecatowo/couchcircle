@@ -67,7 +67,6 @@ function SnackVoteChip() {
   if (!vote) return null;
 
   const remaining = Math.max(0, vote.endsAt - now);
-  const total = vote.endsAt - (vote.endsAt - 30_000); // SNACK_VOTE_WINDOW_MS=30s
   const progress = Math.max(0, Math.min(1, remaining / 30_000));
 
   const myVote: 'yes' | 'no' | null = vote.yes.includes(selfId)
@@ -175,6 +174,9 @@ export function SeshControls() {
         <Separator orientation="vertical" className="h-5 bg-couch-700" />
 
         {/* ── Rotation cluster ──────────────────────────────────────── */}
+        <span className="text-[10px] font-semibold uppercase tracking-widest text-cream-400/50 shrink-0">
+          rotation
+        </span>
         <div className="flex flex-wrap items-center gap-1.5">
           {/* Join / Leave */}
           {inRotation ? (
@@ -308,6 +310,9 @@ export function SeshControls() {
         <Separator orientation="vertical" className="h-5 bg-couch-700" />
 
         {/* ── Vibes cluster ─────────────────────────────────────────── */}
+        <span className="text-[10px] font-semibold uppercase tracking-widest text-cream-400/50 shrink-0">
+          vibes
+        </span>
         <div className="flex flex-wrap items-center gap-1.5">
           {/* Water check */}
           <Button
@@ -368,6 +373,9 @@ export function SeshControls() {
         <Separator orientation="vertical" className="h-5 bg-couch-700" />
 
         {/* ── Status quick-set cluster ──────────────────────────────── */}
+        <span className="text-[10px] font-semibold uppercase tracking-widest text-cream-400/50 shrink-0">
+          your vibe
+        </span>
         <div className="flex flex-wrap items-center gap-1">
           {(
             [

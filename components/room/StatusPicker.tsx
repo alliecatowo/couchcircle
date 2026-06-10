@@ -42,9 +42,9 @@ export function StatusPicker({ children, currentStatus }: StatusPickerProps) {
         className="w-[min(360px,_calc(100vw_-_24px))] p-3"
       >
         <p className="mb-2 text-sm font-display text-cream-200 text-center">
-          how&rsquo;s the vibe?
+          set your vibe
         </p>
-        <div className="grid grid-cols-3 gap-2" role="listbox" aria-label="Pick a status">
+        <div className="grid grid-cols-3 gap-2" role="listbox" aria-label="pick your vibe">
           {ALL_STATUSES.map((status) => {
             const meta = STATUS_META[status];
             const isActive = status === currentStatus;
