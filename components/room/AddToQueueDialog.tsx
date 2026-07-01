@@ -474,10 +474,10 @@ function ScreenShareTab({ canAdd, onAdd }: ScreenShareTabProps) {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-2 rounded-xl border border-couch-650 bg-couch-850 p-4">
+      <div className="flex flex-col gap-2 rounded-2xl border border-couch-650 bg-couch-850 p-4 shadow-[var(--shadow-couch)]">
         <div className="flex items-center gap-2 text-cream-200">
-          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-haze-800/60 text-haze-300 shrink-0">
-            <Monitor className="size-3.5" />
+          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-haze-800/60 text-haze-300 shrink-0">
+            <Monitor className="size-4" />
           </div>
           <span className="text-sm font-medium">share your screen with the room</span>
         </div>
@@ -539,7 +539,7 @@ function ExploreTab({ onPick }: ExploreTabProps) {
       <React.Suspense
         fallback={
           <div className="flex items-center justify-center py-12 text-cream-400 text-sm">
-            loading channels…
+            digging up free stuff…
           </div>
         }
       >
@@ -636,7 +636,7 @@ export function AddToQueueDialog({ open, onOpenChange }: AddToQueueDialogProps) 
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>add to queue</DialogTitle>
+          <DialogTitle>add to up next</DialogTitle>
           <DialogDescription>
             drop something in the lineup
           </DialogDescription>
@@ -654,7 +654,7 @@ export function AddToQueueDialog({ open, onOpenChange }: AddToQueueDialogProps) 
               screen share
             </TabsTrigger>
             <TabsTrigger value="explore" className="flex-1">
-              channel surf 📺
+              explore 📺
             </TabsTrigger>
           </TabsList>
 
