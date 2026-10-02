@@ -92,23 +92,11 @@ jobs:
           fi
           npx partykit deploy --var ALLOWED_ORIGINS=https://couchcircle.vercel.app,https://virtu-sesh.vercel.app
 
-      - name: Deploy Vercel
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: team_TNCBXF1JPB4T9kKagJMWNSOY
-          VERCEL_PROJECT_ID: prj_mbWEw6EALLVythvm7fzJ9Q9eh7wN
-        run: |
-          if [ -z "$VERCEL_TOKEN" ]; then
-            echo "WARNING: VERCEL_TOKEN secret not set — skipping Vercel deploy (fork or missing secret)"
-            exit 0
-          fi
-          npx vercel deploy --prod --token="$VERCEL_TOKEN" --yes
-
       - name: Smoke test
         env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          PARTYKIT_TOKEN: ${{ secrets.PARTYKIT_TOKEN }}
         run: |
-          if [ -z "$VERCEL_TOKEN" ]; then
+          if [ -z "$PARTYKIT_TOKEN" ]; then
             echo "WARNING: deploy secrets not set — skipping smoke test"
             exit 0
           fi
