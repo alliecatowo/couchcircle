@@ -50,7 +50,7 @@ jobs:
       - name: Load test
         run: |
           if [ -f scripts/load-test.mjs ]; then
-            node scripts/load-test.mjs 127.0.0.1:1999 8
+            node scripts/load-test.mjs 127.0.0.1:1999 12
           else
             echo "scripts/load-test.mjs not found — skipping load test (will be required once the script lands)"
           fi
