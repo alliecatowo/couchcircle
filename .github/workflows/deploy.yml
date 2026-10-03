@@ -103,7 +103,7 @@ jobs:
 
           echo "--- smoke: lobby create ---"
           STATUS=$(curl -sf -o /tmp/lobby_response.json -w "%{http_code}" \
-            -X POST https://couchcircle.partykit.dev/parties/lobby/index \
+            -X POST https://couchcircle.alliecatowo.partykit.dev/parties/lobby/index \
             -H "Content-Type: application/json" \
             -d '{"action":"create"}' || echo "000")
           if [ "$STATUS" -ge 200 ] && [ "$STATUS" -lt 300 ]; then
