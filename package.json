@@ -41,6 +41,6 @@
     "concurrently": "^10.0.5",
     "partykit": "^0.0.115",
     "tailwindcss": "^4.3.0",
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   }
 }
