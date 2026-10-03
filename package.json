@@ -9,6 +9,7 @@
     "dev:all": "concurrently -n web,party -c blue,magenta \"npm run dev\" \"npm run dev:party\"",
     "build": "next build",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "start": "next start",
     "deploy:party": "partykit deploy"
   },
@@ -42,6 +43,7 @@
     "concurrently": "^10.0.5",
     "partykit": "^0.0.115",
     "tailwindcss": "^4.3.0",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
   }
 }
