@@ -17,7 +17,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -50,7 +50,7 @@ jobs:
       - name: Load test
         run: |
           if [ -f scripts/load-test.mjs ]; then
-            node scripts/load-test.mjs 127.0.0.1:1999 8
+            node scripts/load-test.mjs 127.0.0.1:1999 12
           else
             echo "scripts/load-test.mjs not found — skipping load test (will be required once the script lands)"
           fi
@@ -75,7 +75,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -92,30 +92,18 @@ jobs:
           fi
           npx partykit deploy --var ALLOWED_ORIGINS=https://couchcircle.vercel.app,https://virtu-sesh.vercel.app
 
-      - name: Deploy Vercel
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: team_TNCBXF1JPB4T9kKagJMWNSOY
-          VERCEL_PROJECT_ID: prj_mbWEw6EALLVythvm7fzJ9Q9eh7wN
-        run: |
-          if [ -z "$VERCEL_TOKEN" ]; then
-            echo "WARNING: VERCEL_TOKEN secret not set — skipping Vercel deploy (fork or missing secret)"
-            exit 0
-          fi
-          npx vercel deploy --prod --token="$VERCEL_TOKEN" --yes
-
       - name: Smoke test
         env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          PARTYKIT_TOKEN: ${{ secrets.PARTYKIT_TOKEN }}
         run: |
-          if [ -z "$VERCEL_TOKEN" ]; then
+          if [ -z "$PARTYKIT_TOKEN" ]; then
             echo "WARNING: deploy secrets not set — skipping smoke test"
             exit 0
           fi
 
           echo "--- smoke: lobby create ---"
           STATUS=$(curl -sf -o /tmp/lobby_response.json -w "%{http_code}" \
-            -X POST https://couchcircle.partykit.dev/parties/lobby/index \
+            -X POST https://couchcircle.alliecatowo.partykit.dev/parties/lobby/index \
             -H "Content-Type: application/json" \
             -d '{"action":"create"}' || echo "000")
           if [ "$STATUS" -ge 200 ] && [ "$STATUS" -lt 300 ]; then
