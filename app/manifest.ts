@@ -10,7 +10,7 @@ export default function manifest(): MetadataRoute.Manifest {
     start_url: '/',
     display: 'standalone',
     background_color: '#181210', // couch-900
-    theme_color: '#e08b34', // ember-500
+    theme_color: '#de6890', // ember-500
     orientation: 'portrait',
     icons: [
       {

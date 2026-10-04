@@ -14,7 +14,7 @@
  *   3. "🛋️ up for grabs — grab it" — controllerId is undefined/absent
  *
  * Transport (play/pause/scrub/rate) is wrapped in <NeedsRemote> so the §10 UX
- * law is enforced: amber-ghost, never dead disabled.
+ * law is enforced: rose-ghost, never dead disabled.
  *
  * Requests are visible only to the holder + host per §10.
  *
@@ -101,7 +101,7 @@ export function RemoteControls() {
         className={cn(
           'grain relative flex h-16 items-center',
           'border-t border-couch-700 bg-couch-800',
-          'shadow-[inset_0_1px_0_rgba(224,139,52,0.06)]',
+          'shadow-[inset_0_1px_0_rgba(222,104,144,0.06)]',
         )}
       />
     );
@@ -223,7 +223,7 @@ export function RemoteControls() {
       className={cn(
         'grain relative flex items-center gap-3 px-4 py-3',
         'border-t border-couch-700 bg-couch-800',
-        'shadow-[inset_0_1px_0_rgba(224,139,52,0.10),var(--shadow-couch)]',
+        'shadow-[inset_0_1px_0_rgba(222,104,144,0.10),var(--shadow-couch)]',
       )}
     >
       {/* ------------------------------------------------------------------ */}

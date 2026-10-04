@@ -95,14 +95,14 @@ export const AVATAR_META: Record<AvatarId, { label: string; blurb: string }> = {
  * Eight warm hex accents matching the late-night living-room palette in
  * DESIGN.md — tuned BRIGHTER so they read clearly as text/tints on the deep
  * couch-900 background (the muddier originals vanished on dark). Each still
- * stays in the warm/cozy lane: ember orange, marigold, clay coral, rose,
+ * stays in the warm/cozy lane: sky, periwinkle, blush, rose,
  * lilac haze, fresh moss, teal sage, sand cream. Used to tint avatars, name
  * plates, and reaction flourishes.
  */
 export const ACCENT_COLORS: string[] = [
-  '#ff9d3d', // ember orange
-  '#ffc24b', // marigold
-  '#ff7a59', // clay coral
+  '#7ec8e8', // sky
+  '#a5b4f5', // periwinkle
+  '#f08fb0', // blush
   '#f56a8c', // rose
   '#bd93f5', // lilac haze
   '#79c98a', // fresh moss

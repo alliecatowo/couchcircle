@@ -88,7 +88,7 @@ const RoomContext = createContext<RoomContextValue | null>(null);
  */
 function makeProjectorIdentity(): IdentitySnapshot {
   const accent =
-    ACCENT_COLORS[Math.floor(Math.random() * ACCENT_COLORS.length)] ?? '#ff9d3d';
+    ACCENT_COLORS[Math.floor(Math.random() * ACCENT_COLORS.length)] ?? '#7ec8e8';
   return {
     id: `prj_${nanoid()}`,
     name: 'the projector',

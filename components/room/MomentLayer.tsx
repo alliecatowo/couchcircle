@@ -10,7 +10,7 @@
  *
  * Subtle > loud. These are the synchronized payoff every ritual lands on:
  *   - spark hits zero      → slow smoke haze wash + ember bloom
- *   - toast clink          → warm amber flash + floating 🥂 burst
+ *   - toast clink          → warm rose flash + floating 🥂 burst
  *   - everyone's ready     → soft golden pulse
  *   - sip roulette result  → suspense sweep + result flash
  *   - movie bingo          → popcorn burst (big finale on the fifth)
@@ -229,7 +229,7 @@ function SparkMoment({ reduced }: { reduced: boolean }) {
         className="absolute bottom-[-20%] left-1/2 h-[60vmin] w-[60vmin] -translate-x-1/2 rounded-full"
         style={{
           background:
-            'radial-gradient(circle, rgba(242,168,80,0.22) 0%, rgba(224,139,52,0.10) 40%, transparent 70%)',
+            'radial-gradient(circle, rgba(236,134,168,0.22) 0%, rgba(222,104,144,0.10) 40%, transparent 70%)',
         }}
         initial={{ opacity: 0, scale: reduced ? 1 : 0.6 }}
         animate={{ opacity: [0, 0.9, 0], scale: reduced ? 1 : [0.6, 1.15, 1.3] }}
@@ -252,7 +252,7 @@ function SparkMoment({ reduced }: { reduced: boolean }) {
   );
 }
 
-// ── clink — warm amber flash + floating 🥂 burst ─────────────────────────────
+// ── clink — warm rose flash + floating 🥂 burst ─────────────────────────────
 
 function ClinkMoment({ reduced }: { reduced: boolean }) {
   const glasses = useParticles(10);
@@ -373,8 +373,8 @@ function VibeMoment({ reduced }: { reduced: boolean }) {
       transition={{ duration: 2, ease: 'easeInOut' }}
       style={{
         boxShadow: reduced
-          ? 'inset 0 0 80px rgba(242,168,80,0.18)'
-          : 'inset 0 0 120px rgba(242,168,80,0.22), inset 0 0 40px rgba(224,139,52,0.16)',
+          ? 'inset 0 0 80px rgba(236,134,168,0.18)'
+          : 'inset 0 0 120px rgba(236,134,168,0.22), inset 0 0 40px rgba(222,104,144,0.16)',
       }}
     />
   );

@@ -354,7 +354,7 @@ export function ParticipantCircle() {
         'px-3 pt-4 pb-3 sm:px-4',
       )}
     >
-      {/* ambient lamp-amber bleed in the top-right corner of the scene */}
+      {/* ambient lamp-rose bleed in the top-right corner of the scene */}
       <div
         className="pointer-events-none absolute -right-10 -top-16 h-56 w-72 rounded-full opacity-60 blur-2xl animate-flicker"
         style={{ background: 'radial-gradient(closest-side, rgba(240,139,52,0.28), transparent)' }}

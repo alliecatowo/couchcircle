@@ -4,7 +4,7 @@
  * NeedsRemote — the single source of the §10 UX law.
  *
  * Wraps any control that requires the remote. When this client canControl,
- * renders children normally. Otherwise renders an amber-ghost variant whose
+ * renders children normally. Otherwise renders an rose-ghost variant whose
  * click fires remote:request (or remote:grab in chaos/up-for-grabs) and shows
  * a transient toast. One wrapper, one policy, everywhere.
  *
@@ -122,10 +122,10 @@ export interface NeedsRemoteProps {
  *   Renders children as-is (passthrough, zero cost).
  *
  * When the remote is needed:
- *   Renders children inside an amber-ghost container. The element *looks*
+ *   Renders children inside an rose-ghost container. The element *looks*
  *   enabled (never a dead disabled button) but intercepts clicks to fire the
  *   appropriate remote message and show a transient toast. Reduced saturation +
- *   amber ring on hover per §10 spec.
+ *   rose ring on hover per §10 spec.
  *
  * Supports render-prop if you need the affordance value in the child:
  *   <NeedsRemote>{({ affordance }) => <button>…</button>}</NeedsRemote>
@@ -212,7 +212,7 @@ export function NeedsRemote({ children, className }: NeedsRemoteProps) {
        * - pointer-events-auto so we catch clicks
        * - cursor-pointer so it looks interactive
        * - reduced saturation on children via filter
-       * - amber ring on hover per §10
+       * - rose ring on hover per §10
        */}
       <div
         role="button"
@@ -231,9 +231,9 @@ export function NeedsRemote({ children, className }: NeedsRemoteProps) {
           // Reduced saturation + slight opacity to signal "not yours yet"
           'transition-all duration-200',
           '[&_*]:pointer-events-none', // children never receive events directly
-          // Amber ghost visual: desaturate + dim baseline
+          // Rose ghost visual: desaturate + dim baseline
           'opacity-70 saturate-50',
-          // On hover: restore a bit, add amber ring
+          // On hover: restore a bit, add rose ring
           'hover:opacity-90 hover:saturate-75',
           'hover:ring-2 hover:ring-ember-500/40 hover:ring-offset-1 hover:ring-offset-transparent',
           'rounded-xl',

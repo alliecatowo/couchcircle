@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
 /**
  * Button variants:
  * - default: muted couch surface, subtle border
- * - accent:  the ember (lamp-amber) glow CTA — the primary "do the thing"
+ * - accent:  the ember (lamp-rose) glow CTA — the primary "do the thing"
  * - ghost:   text-only, surfaces on hover
  * - outline: bordered, transparent fill
  * - danger:  warm coral-red, for emergency-pause / destructive actions
