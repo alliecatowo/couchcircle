@@ -822,7 +822,7 @@ implementations before styling anything.
 - **`ErrorBanner`**: `lastError` + `connectionStatus !== 'connected'` states ("reconnecting
   to the couch…"). Slides down from top; auto-dismiss when cleared.
 - **`ConnectionHealth`**: small dot+label from `connectionStatus` + rttMs (green < 80ms,
-  amber < 250, red otherwise).
+  rose < 250, red otherwise).
 - **`MediaStage`** (media-stage): the shared TV. Owns ONE `SyncEngine` instance (created
   with context fns, destroyed on unmount) and renders the right player by
   `state.media.adapter`. Adapter `'idle'` → cozy TV-off screen (flickering glow,
@@ -969,7 +969,7 @@ style so the room never moves in lockstep). Pure SVG+CSS, no images.
 
 `DESIGN.md` documents everything below for the other agents; `app/globals.css` implements
 tokens via Tailwind v4 `@theme` (+ keyframes + a film-grain/noise overlay utility +
-glow utilities). Direction: late-night living room — deep warm browns/inks, lamp-amber,
+glow utilities). Direction: late-night living room — deep warm browns/inks, lamp-rose,
 moss green, faint purple haze; generous rounding (rounded-2xl+); soft layered shadows;
 slow drifting smoke; light typographic warmth (Fraunces for display via `next/font`,
 a soft sans for body). Components in `components/ui/` follow shadcn-style APIs:

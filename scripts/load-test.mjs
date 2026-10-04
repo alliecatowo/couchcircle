@@ -29,7 +29,7 @@ const ROOM_WS = (id) => `ws://${HOST}/parties/main/${id}`;
 // joins are fine; we just stagger slightly to avoid hammering the lobby.
 
 const AVATARS  = ['goblin', 'frog', 'cat', 'chinchilla', 'sprout', 'blanket'];
-const ACCENTS  = ['#ff9d3d', '#ffc24b', '#ff7a59', '#f56a8c', '#bd93f5', '#79c98a', '#5fc7bb', '#e7c79a'];
+const ACCENTS  = ['#7ec8e8', '#a5b4f5', '#f08fb0', '#f56a8c', '#bd93f5', '#79c98a', '#5fc7bb', '#e7c79a'];
 const CHAT_LINES = [
   'finally we watching this 🛋️',
   'this part gets me every time',
@@ -416,7 +416,7 @@ async function run() {
       await probeClient.opened();
       probeClient.send({
         type: 'room:join',
-        participant: { id: 'lt-probe', name: 'probe', avatar: 'goblin', accent: '#ff9d3d' },
+        participant: { id: 'lt-probe', name: 'probe', avatar: 'goblin', accent: '#7ec8e8' },
       });
 
       // The server should EITHER:

@@ -32,7 +32,7 @@ export const metadata: Metadata = {
   description:
     'Watch YouTube, direct media links, or screen share with friends — synced, cozy, and actually fun.',
   // [sync] pwa §6 — PWA metadata additions
-  themeColor: '#e08b34', // ember-500
+  themeColor: '#de6890', // ember-500
   appleWebApp: {
     capable: true,
     title: 'CouchCircle',

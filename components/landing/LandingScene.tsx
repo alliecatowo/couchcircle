@@ -183,9 +183,9 @@ function CouchSVG() {
 
       {/* Ember accent stitching on arm caps */}
       <line x1="28" y1="46" x2="48" y2="46"
-        stroke="#c06d25" strokeWidth="0.8" strokeLinecap="round" opacity="0.6" />
+        stroke="#bf4a76" strokeWidth="0.8" strokeLinecap="round" opacity="0.6" />
       <line x1="432" y1="46" x2="452" y2="46"
-        stroke="#c06d25" strokeWidth="0.8" strokeLinecap="round" opacity="0.6" />
+        stroke="#bf4a76" strokeWidth="0.8" strokeLinecap="round" opacity="0.6" />
     </svg>
   );
 }

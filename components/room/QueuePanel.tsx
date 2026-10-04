@@ -153,7 +153,7 @@ function QueueRow({
         isNowPlaying
           ? [
               'bg-ember-500/10',
-              'shadow-[inset_0_0_0_1px_rgba(224,139,52,0.22)]',
+              'shadow-[inset_0_0_0_1px_rgba(222,104,144,0.22)]',
               'animate-pulse-glow',
             ]
           : 'hover:bg-couch-750/70 hover:shadow-[var(--shadow-couch)]',
@@ -161,7 +161,7 @@ function QueueRow({
     >
       {/* Left ember bar for now-playing */}
       {isNowPlaying && (
-        <div className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full bg-ember-400/80 shadow-[0_0_8px_2px_rgba(242,168,80,0.5)]" />
+        <div className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full bg-ember-400/80 shadow-[0_0_8px_2px_rgba(236,134,168,0.5)]" />
       )}
 
       {/* Thumbnail */}

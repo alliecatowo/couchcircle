@@ -1,7 +1,7 @@
 # CouchCircle — Design System (v2)
 
 > **late-night living room.** One lamp on, the TV flickering, smoke drifting,
-> friends melted into a couch. Deep warm browns and inks, amber glow, a little
+> friends melted into a couch. Deep warm browns and inks, rose glow, a little
 > moss green, a faint purple haze. Analog, soft, a bit funny. Never a sterile
 > SaaS dashboard. Never a blue/purple startup gradient.
 
@@ -38,16 +38,16 @@ the one exception (they're user-chosen runtime values; apply via inline style).
 | `couch-650` | `#4a3a32` | strong border / muted edge (the TV bezel ring) |
 | `couch-600` | `#5d4a40` | disabled foreground, faint muted text |
 
-### Accent — `ember` (lamp-amber glow, the warm light)
+### Accent — `ember` (lamp-rose glow, the warm light)
 
 | Token | Hex | Usage |
 |---|---|---|
-| `ember-950`–`ember-700` | `#2a1505`…`#95501a` | deep amber wells, pressed states |
-| `ember-600` | `#c06d25` | accent hover-dark |
-| `ember-500` | `#e08b34` | **primary accent** (buttons, focus ring, active) |
-| `ember-400` | `#f2a850` | bright accent, glow core, icon highlights |
-| `ember-300` | `#f8c178` | accent text on dark chips, the spark count |
-| `ember-200` | `#fbd9a8` | softest amber tint |
+| `ember-950`–`ember-700` | `#2b0d1a`…`#95305a` | deep rose wells, pressed states |
+| `ember-600` | `#bf4a76` | accent hover-dark |
+| `ember-500` | `#de6890` | **primary accent** (buttons, focus ring, active) |
+| `ember-400` | `#ec86a8` | bright accent, glow core, icon highlights |
+| `ember-300` | `#f4a9c2` | accent text on dark chips, the spark count |
+| `ember-200` | `#f9cddc` | softest rose tint |
 
 ### Moss — sage green (calm, "go", ready, plants)
 
@@ -99,8 +99,8 @@ components; these aliases exist for shadcn muscle memory (`bg-background`,
 ### Participant accents (`ACCENT_COLORS`)
 
 The protocol gives each participant an `accent` hex from a warm 8-swatch set
-(owned by the constants task, matched to this palette): ember orange `#ff9d3d`,
-marigold `#ffc24b`, clay coral `#ff7a59`, rose `#f56a8c`, lilac haze `#bd93f5`,
+(owned by the constants task, matched to this palette): sky `#7ec8e8`,
+periwinkle `#a5b4f5`, blush `#f08fb0`, rose `#f56a8c`, lilac haze `#bd93f5`,
 fresh moss `#79c98a`, teal sage `#5fc7bb`, sand cream `#e7c79a`. Apply as an
 inline `style={{ color: accent }}` / `style={{ '--accent': accent }}` — it's
 runtime data, so it's the one place a non-token color is legitimate.
@@ -155,7 +155,7 @@ gaps `gap-2`/`gap-3`. Give things room — cramped is the opposite of cozy.
 |---|---|---|
 | `--shadow-couch` | `shadow-[var(--shadow-couch)]` | resting cards/panels, the wall |
 | `--shadow-lifted` | `shadow-[var(--shadow-lifted)]` | dialogs, popovers, menus, the TV set |
-| `--shadow-ember` | `shadow-[var(--shadow-ember)]` | amber-lit emphasis |
+| `--shadow-ember` | `shadow-[var(--shadow-ember)]` | rose-lit emphasis |
 | `--shadow-moss` | `shadow-[var(--shadow-moss)]` | green-lit emphasis |
 
 For interactive glows prefer the **utility classes** `.glow-ember` /
@@ -197,7 +197,7 @@ equivalent — pick whichever reads better.
 | `float-bob` | gentle vertical bob (±6px, 4.5s) | idle avatars, the lamp, floating cards, the blocked-curtain 👆 |
 | `sway` | slow rotate ±2.5° (6s) | plants, blanket person, hanging things |
 | `flicker` | irregular brightness/opacity (3.2s) | TV glow, the lamp pool, the idle "tv's off" screen |
-| `pulse-glow` | breathing amber box-shadow (2.4s) | now-playing item, active CTA |
+| `pulse-glow` | breathing rose box-shadow (2.4s) | now-playing item, active CTA |
 | `puff` | smoke rises + fades + drifts (3.6s) | smoke particles incl. the spark countdown (set per-instance `left`/`animation-delay`) |
 | `wiggle` | quick ±7° shake (0.5s, one-shot) | error nudge, "hey!" reactions |
 | `pop-in` | scale+fade entrance (0.32s, one-shot) | newly added queue items, toasts, badges, the sync/blocked pills |
@@ -220,9 +220,9 @@ Defined in `app/globals.css`. Documented here for everyone:
 |---|---|---|
 | `.grain` | film-grain noise overlay on the element (sets `position: relative`, paints noise via `::before`, `mix-blend: overlay`, ~5% opacity at `z-0`) | add to any surface you want to feel analog — cards, the stage wall, the couch. Keep real content above it (`relative z-10`). |
 | `.grain-fixed` | same noise but `position: fixed` (covers the viewport) | the single page-level grain layer (RoomShell mounts `<div className="grain-fixed pointer-events-none fixed inset-0 z-0" />`). |
-| `.glow-ember` | warm amber halo + hairline ring | accent buttons, now-playing, the lamp, focused CTAs, the unmute pill |
+| `.glow-ember` | warm rose halo + hairline ring | accent buttons, now-playing, the lamp, focused CTAs, the unmute pill |
 | `.glow-moss` | calm green halo + hairline ring | ready states, moss-positive moments |
-| `.tv-glow` | flickering amber/haze radial glow behind the element (`::after`, `z-index:-1`, `border-radius: inherit`) | the MediaStage bezel and the idle TV-off screen. Element needs a non-static position + `border-radius`. |
+| `.tv-glow` | flickering rose/haze radial glow behind the element (`::after`, `z-index:-1`, `border-radius: inherit`) | the MediaStage bezel and the idle TV-off screen. Element needs a non-static position + `border-radius`. |
 
 > **Grain gotcha:** `.grain::before` is at `z-0`, so wrap real content to stack
 > above it (`relative z-10`). Button/Card don't apply grain themselves — opt in
@@ -358,7 +358,7 @@ pass `hideClose` to remove it. Centered, `rounded-3xl`, blurred overlay.
 
 ### Input / Label — `input.tsx`, `label.tsx`
 
-Native `<input>` / `<label>` wrappers. Sunken couch field, warm amber focus
+Native `<input>` / `<label>` wrappers. Sunken couch field, warm rose focus
 ring. Pair with `htmlFor`.
 
 ### Badge — `badge.tsx`

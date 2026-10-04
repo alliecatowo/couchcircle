@@ -18,16 +18,16 @@
   --color-couch-650: #4a3a32; /* strong border / muted edge */
   --color-couch-600: #5d4a40; /* muted text-ish, disabled fg */
 
-  /* ---- Ember: lamp-amber glow accent (the warm light source) ----------- */
-  --color-ember-950: #2a1505;
-  --color-ember-900: #43220a;
-  --color-ember-800: #6b3811;
-  --color-ember-700: #95501a;
-  --color-ember-600: #c06d25;
-  --color-ember-500: #e08b34; /* primary accent */
-  --color-ember-400: #f2a850; /* bright accent / glow core */
-  --color-ember-300: #f8c178;
-  --color-ember-200: #fbd9a8;
+  /* ---- Ember: lamp-rose glow accent (the warm light source) ----------- */
+  --color-ember-950: #2b0d1a;
+  --color-ember-900: #471529;
+  --color-ember-800: #6e2040;
+  --color-ember-700: #95305a;
+  --color-ember-600: #bf4a76;
+  --color-ember-500: #de6890; /* primary accent */
+  --color-ember-400: #ec86a8; /* bright accent / glow core */
+  --color-ember-300: #f4a9c2;
+  --color-ember-200: #f9cddc;
 
   /* ---- Moss: sage/green (plants, calm, "go" / ready) ------------------- */
   --color-moss-900: #16241a;
@@ -272,7 +272,7 @@
   /* fixed variant covers the whole viewport, e.g. a page-level overlay */
   .grain-fixed::before { position: fixed; }
 
-  /* Warm amber glow halo (accent buttons, now-playing items, the lamp) */
+  /* Warm rose glow halo (accent buttons, now-playing items, the lamp) */
   .glow-ember {
     box-shadow:
       0 0 0 1px rgba(240, 139, 52, 0.18),

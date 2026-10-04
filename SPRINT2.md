@@ -133,7 +133,7 @@ The rotation generalizes to **the circle**, with a kind: `'toke' | 'drink'`.
   above everything incl. theater): diffs `state.events` (existing seen-ids pattern) and
   plays full-viewport, GPU-cheap (opacity/transform only) 2–4s ambient filter moments:
   - spark hits zero → slow smoke haze wash + ember bloom
-  - toast clink → warm amber flash + floating 🥂 burst
+  - toast clink → warm rose flash + floating 🥂 burst
   - everyone's ready → soft golden pulse
   - pass-the-vibe → the existing seat glow wave ALSO ripples the viewport edge
   Subtle > loud; never blocks input (pointer-events-none); respects prefers-reduced-motion.
@@ -165,7 +165,7 @@ The remote is a single physical object. Exactly one holder, or **up for grabs**.
 - Single source of truth chip in the remote bar; the holder's couch avatar carries 📺;
   requests visible only to the holder (+ host); host always has "snag it back".
 - UX law: any control requiring the remote, when you lack it, renders the SAME
-  affordance everywhere — enabled-looking but amber-ghost, click = sends remote:request
+  affordance everywhere — enabled-looking but rose-ghost, click = sends remote:request
   (or grab in chaos/up-for-grabs) with a "asked for the remote ✋" toast — never a dead
   disabled button. Implement once as a small wrapper (e.g. <NeedsRemote> in
   components/room/needs-remote.tsx) and use it in RemoteControls, QueuePanel, SeshControls.

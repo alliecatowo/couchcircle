@@ -136,7 +136,7 @@ function UnreadDot() {
     <span
       className={cn(
         'h-1.5 w-1.5 rounded-full bg-ember-400',
-        'shadow-[0_0_4px_1px_rgba(242,168,80,0.7)]',
+        'shadow-[0_0_4px_1px_rgba(236,134,168,0.7)]',
         'animate-pulse-glow',
       )}
       aria-hidden

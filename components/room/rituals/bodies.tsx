@@ -155,7 +155,7 @@ export function ToastBody() {
               className={cn(
                 'text-sm leading-none transition-all duration-300',
                 has ? 'opacity-100' : 'opacity-25 grayscale',
-                isSelf && has && 'drop-shadow-[0_0_4px_rgba(242,168,80,0.6)]',
+                isSelf && has && 'drop-shadow-[0_0_4px_rgba(236,134,168,0.6)]',
               )}
               aria-hidden
             >

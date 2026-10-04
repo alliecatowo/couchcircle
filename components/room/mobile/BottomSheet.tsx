@@ -232,7 +232,7 @@ export function BottomSheet() {
                   <span>{label}</span>
                   {showDot && (
                     <span
-                      className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-ember-400 shadow-[0_0_4px_1px_rgba(242,168,80,0.7)]"
+                      className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-ember-400 shadow-[0_0_4px_1px_rgba(236,134,168,0.7)]"
                       aria-hidden
                     />
                   )}

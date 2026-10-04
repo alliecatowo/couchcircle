@@ -72,7 +72,7 @@ const TONE_BAR: Record<RitualTone, string> = {
 };
 
 const TONE_GLOW: Record<RitualTone, string> = {
-  ember: 'shadow-[inset_0_1px_0_rgba(224,139,52,0.10),var(--shadow-couch)]',
+  ember: 'shadow-[inset_0_1px_0_rgba(222,104,144,0.10),var(--shadow-couch)]',
   moss: 'shadow-[inset_0_1px_0_rgba(86,133,95,0.12),var(--shadow-couch)]',
   haze: 'shadow-[inset_0_1px_0_rgba(141,114,164,0.12),var(--shadow-couch)]',
 };

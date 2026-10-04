@@ -374,14 +374,14 @@ export function LampDefs() {
   return (
     <defs>
       <radialGradient id="furLampPool" cx="50%" cy="50%" r="50%">
-        <stop offset="0%" stopColor="#f8c178" stopOpacity="0.5" />
-        <stop offset="45%" stopColor="#e08b34" stopOpacity="0.2" />
-        <stop offset="100%" stopColor="#e08b34" stopOpacity="0" />
+        <stop offset="0%" stopColor="#f4a9c2" stopOpacity="0.5" />
+        <stop offset="45%" stopColor="#de6890" stopOpacity="0.2" />
+        <stop offset="100%" stopColor="#de6890" stopOpacity="0" />
       </radialGradient>
       <radialGradient id="furLampBulb" cx="50%" cy="35%" r="65%">
         <stop offset="0%" stopColor="#fff3d6" />
-        <stop offset="60%" stopColor="#f8c178" />
-        <stop offset="100%" stopColor="#e08b34" />
+        <stop offset="60%" stopColor="#f4a9c2" />
+        <stop offset="100%" stopColor="#de6890" />
       </radialGradient>
     </defs>
   );
